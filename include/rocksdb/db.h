@@ -164,6 +164,12 @@ class DB {
   // will use to operate on column family column_family[i].
   // Before delete DB, you have to close All column families by calling
   // DestroyColumnFamilyHandle() with all the handles.
+  /**
+   * 这个签名参数设计就是参数语义的分类
+   * const T& 输入参数
+   * T&       必填输出参数
+   * T*       可选输出参数
+   */
   static Status Open(const DBOptions& db_options, const std::string& name,
                      const std::vector<ColumnFamilyDescriptor>& column_families,
                      std::vector<ColumnFamilyHandle*>* handles,

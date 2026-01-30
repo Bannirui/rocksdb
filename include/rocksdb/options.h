@@ -331,6 +331,16 @@ struct ColumnFamilyOptions : public AdvancedColumnFamilyOptions {
   //
   // If left empty, db_paths will be used.
   // Default: empty
+  /**
+   * CF的SST文件 完全独立使用这些路径
+   * 也就是说
+   * 1 CF可以绕开DB级别的db_paths
+   * 2 CF可以有独立的冷热分层
+   * 3 CF可以独立扩容/迁移
+   * sst目录的选取优先级是 cf级别>db级别
+   * 也就说如果配置了cf级别的sst目录就用cf级别的 如果没有cf级别的就用db级别的
+   * 也就是要保证有sst目录
+   */
   std::vector<DbPath> cf_paths;
 
   // Compaction concurrent thread limiter for the column family.
@@ -845,6 +855,13 @@ struct DBOptions {
   // If left empty, only one path will be used, which is db_name passed when
   // opening the DB.
   // Default: empty
+  /**
+   * sst的目录
+   * 1 要是没配置就用db顶层目录
+   * 2 配置了就用这个放sst文件
+   * 3 可以配置多个 RocksDB放的顺序就是vector里面的顺序 依次放
+   * 放不下就放下一个里面 都放不下就报写失败
+   */
   std::vector<DbPath> db_paths;
 
   // This specifies the info LOG dir.
@@ -1729,6 +1746,13 @@ struct DBOptions {
 };
 
 // Options to control the behavior of a database (passed to DB::Open)
+// 跟DBOptions和CFOptions比起来 Options并没有新增成员 为什么是用继承而不是组合呢
+// 这个地方主要是保持语义和api的风格
+// 1 语义层面 DBOptions是DB全局级别 生命周期是DB生命周期
+//           CFOptions是CF级别的配置 生命周期是CF的生命周期
+//           因此Options的语义就是单CF+单DB 快速打开一个DB就行 给一个CF就行而不关心CF的细分
+// 2 api的使用体验 如果用组合的话 想要get或者set就话就是option.DbOption.set(xxx) 有点反人类
+// Options继承新增扩展的是行为
 struct Options : public DBOptions, public ColumnFamilyOptions {
   // Create an Options object with default values for all fields.
   Options() : DBOptions(), ColumnFamilyOptions() {}

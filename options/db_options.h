@@ -37,11 +37,20 @@ struct ImmutableDBOptions {
   int max_file_opening_threads;
   std::shared_ptr<Statistics> statistics;
   bool use_fsync;
+  /**
+   * 一个逻辑db的多个物理存储池 SST文件被放在这些目录
+   * 什么场景需要给一个db划分不同的数据目录呢
+   * 1 磁盘不止一块 肯定是SSD放热数据 HDD放冷数据
+   * 2 数据规模非常大 多个数据目录可以让文件分散 IO调度更平滑
+   * 3 分治不同的数据 比如有的数据是主数据 有的数据是元数据
+   * 不让不同的数据混在一个目录
+   */
   std::vector<DbPath> db_paths;
   std::string db_log_dir;
   // The wal_dir option from the file.  To determine the
   // directory in use, the GetWalDir or IsWalDirSameAsDBPath
   // methods should be used instead of accessing this variable directly.
+  // wal目录
   std::string wal_dir;
   size_t max_log_file_size;
   size_t log_file_time_to_roll;

@@ -23,6 +23,19 @@
 
 namespace ROCKSDB_NAMESPACE {
 
+/**
+ * db顶层目录下的CURRENT文件十分重要
+ * CURRENT内容就是一行MANIFEST-000123 表示现在用的是哪个manifest文件
+ * 作用是指向当前正在生效的MANIFEST文件 本质是提供一个crash-safe的原子指针
+ * manifest文件是VersionEdit的日志 本质是RocksDB的元数据
+ * 那么为什么不直接用manifest文件而是要这么间接指一个呢 因为
+ * 1 manifest是不断滚动的
+ * 2 文件名自带自增编号
+ * 不能靠时间戳定位到最新的manifest文件
+ * manifest文件更新过程中发生crash导致也不能按照文件名自增定位 所以方案就是 1
+ * RocksDB新建manifest文件 2 完整写入manifest文件然后fsync 3
+ * 原子地更新CURRENT文件内容指向这个manifest文件
+ */
 const std::string kCurrentFileName = "CURRENT";
 const std::string kOptionsFileNamePrefix = "OPTIONS-";
 const std::string kCompactionProgressFileNamePrefix = "COMPACTION_PROGRESS-";
@@ -31,6 +44,7 @@ const std::string kTempFileNameSuffix = "dbtmp";
 static const std::string kRocksDbTFileExt = "sst";
 static const std::string kLevelDbTFileExt = "ldb";
 static const std::string kRocksDBBlobFileExt = "blob";
+// ${wal_dir}/archive 用来存放旧的wal日志 不是用来写wal的而是被切换下来的旧wal但是还没到删除条件
 static const std::string kArchivalDirName = "archive";
 
 // Given a path, flatten the path name by replacing all chars not in

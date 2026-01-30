@@ -90,6 +90,16 @@ struct MemTableInfo;
 // Class to maintain directories for all database paths other than main one.
 class Directories {
  public:
+  /**
+   * 创建目录
+   * /.../${db_name}/
+   * |--WAL
+   * |  |--archive|
+   * |--sst
+   * @param dbname db的顶级目录 /.../${db_name}/
+   * @param wal_dir wal目录
+   * @param data_paths sst目录
+   */
   IOStatus SetDirectories(FileSystem* fs, const std::string& dbname,
                           const std::string& wal_dir,
                           const std::vector<DbPath>& data_paths);
@@ -1114,6 +1124,7 @@ class DBImpl : public DB {
                      const bool batch_per_txn, const bool is_retry,
                      bool* can_retry);
 
+  // 在系统中创建好目录dirname 然后在RocksDB创建对象表示这个目录
   static IOStatus CreateAndNewDirectory(
       FileSystem* fs, const std::string& dirname,
       std::unique_ptr<FSDirectory>* directory);
@@ -1365,6 +1376,7 @@ class DBImpl : public DB {
   bool seq_per_batch() const { return seq_per_batch_; }
 
  protected:
+  // db的顶层目录
   const std::string dbname_;
   // TODO(peterd): unify with VersionSet::db_id_
   std::string db_id_;
@@ -3177,6 +3189,7 @@ class DBImpl : public DB {
   // installed to MANIFEST first.
   InstrumentedCondVar atomic_flush_install_cv_;
 
+  // 标识wal目录是不是和db级别的sst目录一样 也就是没有单独指定wal目录的时候
   bool wal_in_db_path_;
   std::atomic<uint64_t> max_total_wal_size_;
 

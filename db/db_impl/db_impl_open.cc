@@ -422,6 +422,7 @@ Status DBImpl::Recover(
   assert(db_lock_ == nullptr);
   std::vector<std::string> files_in_dbname;
   if (!read_only) {
+    // 创建必要的目录 db的顶层目录 wal目录 sst目录
     Status s = directories_.SetDirectories(fs_.get(), dbname_,
                                            immutable_db_options_.wal_dir,
                                            immutable_db_options_.db_paths);
@@ -2195,11 +2196,17 @@ Status DBImpl::WriteLevel0TableForRecovery(int job_id, ColumnFamilyData* cfd,
   return s;
 }
 
+/**
+ * @param options 可以指定wal_dir拼在db顶层目录下面当作wal目录
+ *                可以指定db_paths当作sst目录
+ * @param dbname db的顶层目录
+ */
 Status DB::Open(const Options& options, const std::string& dbname,
                 std::unique_ptr<DB>* dbptr) {
   DBOptions db_options(options);
   ColumnFamilyOptions cf_options(options);
   std::vector<ColumnFamilyDescriptor> column_families;
+  // 不指定cf列簇 就用一个default列簇
   column_families.emplace_back(kDefaultColumnFamilyName, cf_options);
   if (db_options.persist_stats_to_disk) {
     column_families.emplace_back(kPersistentStatsColumnFamilyName, cf_options);
@@ -2412,17 +2419,22 @@ Status DBImpl::Open(const DBOptions& db_options, const std::string& dbname,
   } else {
     assert(impl->init_logger_creation_s_.ok());
   }
+  // WAL日志目录
   s = impl->env_->CreateDirIfMissing(impl->immutable_db_options_.GetWalDir());
   if (s.ok()) {
+    // sst目录 sst目录用来放sst文件的 使用的优先级是 cf级别的>db级别的
     std::vector<std::string> paths;
+    // db级别的sst目录
     for (auto& db_path : impl->immutable_db_options_.db_paths) {
       paths.emplace_back(db_path.path);
     }
+    // cf级别的sst目录
     for (auto& cf : column_families) {
       for (auto& cf_path : cf.options.cf_paths) {
         paths.emplace_back(cf_path.path);
       }
     }
+    // 创建sst目录
     for (const auto& path : paths) {
       s = impl->env_->CreateDirIfMissing(path);
       if (!s.ok()) {
@@ -2437,6 +2449,7 @@ Status DBImpl::Open(const DBOptions& db_options, const std::string& dbname,
     }
   }
   if (s.ok()) {
+    // 存放切换下来不用的wal日志 这些wal日志还没到删除条件 所以要先放到专门的目录
     s = impl->CreateArchivalDirectory();
   }
   if (!s.ok()) {
