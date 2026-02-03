@@ -21,13 +21,23 @@ namespace ROCKSDB_NAMESPACE {
 #pragma warning(push)
 #pragma warning(disable : 4244)
 #endif
+/**
+ * 底层的编码方式 是系列化的基石
+ * 定长32位的整数编成变长
+ * 对于每个字节 低7位放数据 最高位放标识 1标识后面还有字节
+ * 0标识这个最后一个字节后面没有了 小端序的方式
+ */
 char* EncodeVarint32(char* dst, uint32_t v) {
   // Operate on characters as unsigneds
   unsigned char* ptr = reinterpret_cast<unsigned char*>(dst);
+  // 二进制1000 0000 就是高第7位的标识1 表示后面还有字节
   static const int B = 128;
   if (v < (1 << 7)) {
+    // 7bit能放下 就把数据放在抵7位上 第高位0
+    // 先解引用把数据写进去再移动指针
     *(ptr++) = v;
   } else if (v < (1 << 14)) {
+    // 2字节能放下 第1个字节放下数据的低7位 第1个字节的最高位放1 表示还有后续 第2个字节放数据刨去7位的高位 第2字节最高位放0
     *(ptr++) = v | B;
     *(ptr++) = v >> 7;
   } else if (v < (1 << 21)) {

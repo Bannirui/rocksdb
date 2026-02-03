@@ -6492,6 +6492,7 @@ Status VersionSet::Recover(
   const ReadOptions read_options(Env::IOActivity::kDBOpen);
   // Read "CURRENT" file, which contains a pointer to the current manifest
   // file
+  // 从CURRENT文件中拿到当前的manifest文件名
   std::string manifest_path;
   Status s = GetCurrentManifestPath(dbname_, fs_.get(), is_retry,
                                     &manifest_path, &manifest_file_number_);
@@ -6531,6 +6532,7 @@ Status VersionSet::Recover(
         /*track_found_and_missing_files=*/false, no_error_if_files_missing,
         io_tracer_, read_options, /*allow_incomplete_valid_version=*/false,
         EpochNumberRequirement::kMightMissing);
+    // 解析manifest replay所有的VersionEdit 生成当前的version 至此RocksDB知道了自己有哪些sst 这些sst在第几层 key range是什么
     handler.Iterate(reader, &log_read_status);
     s = handler.status();
     if (s.ok()) {

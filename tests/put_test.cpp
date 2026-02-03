@@ -13,7 +13,7 @@ int main() {
   options.create_if_missing = true;
 
   // 不在options中显式制定wal的目录就会用db_path
-  std::string dbName = "/tmp/rocksdb_ctest_open";
+  std::string dbName = "/tmp/rocksdb_ctest_put";
   std::string walDir = dbName + "/wal";
   std::string sstDir = dbName + "/sst";
   options.wal_dir = walDir;
@@ -33,5 +33,6 @@ int main() {
   auto s = rocksdb::DB::Open(options, dbName, &db);
   assert(s.ok());
 
+  db->Put(rocksdb::WriteOptions(), "hello", "world");
   return 0;
 }

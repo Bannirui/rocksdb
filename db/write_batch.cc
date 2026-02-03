@@ -933,6 +933,9 @@ Status WriteBatch::Put(ColumnFamilyHandle* column_family, const Slice& key,
   uint32_t cf_id = 0;
   Status s;
 
+  // s表示cf是否合法
+  // cf_id是cf的编号 默认cf的编号是0
+  // ts_sz标识cf是否启用timestamp 长度是多少
   std::tie(s, cf_id, ts_sz) =
       WriteBatchInternal::GetColumnFamilyIdAndTimestampSize(this,
                                                             column_family);
@@ -940,8 +943,11 @@ Status WriteBatch::Put(ColumnFamilyHandle* column_family, const Slice& key,
   if (!s.ok()) {
     return s;
   }
-
+  // timestamp机制的引用有两个明显的作用
+  // 1 key的排序因素里面整合进了时间戳
+  // 2 mvcc的版本控制能看到的数据版本
   if (0 == ts_sz) {
+    // RocksDB默认是关闭timestamp特性的
     s = WriteBatchInternal::Put(this, cf_id, key, value);
   } else {
     needs_in_place_update_ts_ = true;

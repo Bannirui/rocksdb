@@ -47,10 +47,12 @@ enum FileType {
   kDBLockFile,
   kTableFile,
   kDescriptorFile,
+  // db目录下CURRENT文件
   kCurrentFile,
   kTempFile,
   kInfoLogFile,  // Either the current one, or an old one
   kMetaDatabase,
+  // db目录下IDENTIFY文件
   kIdentityFile,
   kOptionsFile,
   kBlobFile,

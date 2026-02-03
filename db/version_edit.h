@@ -1005,6 +1005,12 @@ class VersionEdit {
   int max_level_ = 0;
   std::string db_id_;
   std::string comparator_;
+  /**
+   * Manifest记录的是
+   * 1 当前数据库结构中 哪些SST文件被认为是有效的一部分
+   * 2 以及这些SST是在什么WAL边界条件下生成的
+   * 换言之也就是说在当前version生效时只需要replay log_number之后的WAL
+   */
   uint64_t log_number_ = 0;
   uint64_t prev_log_number_ = 0;
   uint64_t next_file_number_ = 0;

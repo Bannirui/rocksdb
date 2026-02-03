@@ -189,6 +189,7 @@ std::string DescriptorFileName(const std::string& dbname, uint64_t number) {
   return dbname + "/" + DescriptorFileName(number);
 }
 
+// db顶层目录下的CURRENT文件路径
 std::string CurrentFileName(const std::string& dbname) {
   return dbname + "/" + kCurrentFileName;
 }
@@ -306,6 +307,18 @@ bool ParseFileName(const std::string& fname, uint64_t* number, FileType* type,
   return ParseFileName(fname, number, "", type, log_type);
 }
 
+/**
+ * RocksDB有很多的文件
+ * CURRENT IDENTIFY LOCK LOG MANIFEST-000005
+ * 有的文件是有编号的 有的文件是没有编号的
+ * 给一个文件名 判断这个文件是什么类型的
+ * 如果是有编号的就从文件名后缀解析出编号
+ * 如果是没有编号的就固定0
+ * @param fname 文件名
+ * @param number 从文件名解析出来的文件编号 没有编号的就固定0
+ * @param type 从文件名解析出来的文件类型
+ * @param log_type wal文件特殊 有archive和alive区别
+ */
 bool ParseFileName(const std::string& fname, uint64_t* number,
                    const Slice& info_log_name_prefix, FileType* type,
                    WalFileType* log_type) {
@@ -317,6 +330,7 @@ bool ParseFileName(const std::string& fname, uint64_t* number,
     *number = 0;
     *type = kIdentityFile;
   } else if (rest == "CURRENT") {
+    // CURRENT文件没有自增后缀 没有编号 number就给0
     *number = 0;
     *type = kCurrentFile;
   } else if (rest == "LOCK") {

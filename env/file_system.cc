@@ -198,6 +198,10 @@ IOStatus WriteStringToFile(FileSystem* fs, const Slice& data,
   return s;
 }
 
+/**
+ * @param fname 要读的文件名
+ * @param data 读出来的文件内容
+ */
 IOStatus ReadFileToString(FileSystem* fs, const std::string& fname,
                           std::string* data) {
   return ReadFileToString(fs, fname, IOOptions(), data);

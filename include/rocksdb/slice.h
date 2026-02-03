@@ -30,6 +30,7 @@
 
 namespace ROCKSDB_NAMESPACE {
 
+// Slice只需要知道字符串的地址和字符串多长 并不关心这个资源的所有权 设计理念跟string_view一样
 class Slice {
  public:
   // Create an empty slice.

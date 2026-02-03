@@ -10,6 +10,11 @@
 
 namespace ROCKSDB_NAMESPACE {
 
+/**
+ * 拿到当前manifest文件的路径和编号
+ * @param manifest_path 当前manifest文件路径
+ * @param manifest_file_number manifest文件编号
+ */
 Status GetCurrentManifestPath(const std::string& dbname, FileSystem* fs,
                               bool is_retry, std::string* manifest_path,
                               uint64_t* manifest_file_number) {
@@ -18,20 +23,24 @@ Status GetCurrentManifestPath(const std::string& dbname, FileSystem* fs,
   assert(manifest_file_number != nullptr);
 
   IOOptions opts;
+  // CURRENT文件里面的内容 就是一行内容 是manifest文件名
   std::string fname;
   if (is_retry) {
     opts.verify_and_reconstruct_read = true;
   }
+  // 读CURRENT文件里面的内容 看看现在使用的是哪个manifest文件
   Status s = ReadFileToString(fs, CurrentFileName(dbname), opts, &fname);
   if (!s.ok()) {
     return s;
   }
+  // 在CURRENT里面没读到manifest文件名
   if (fname.empty() || fname.back() != '\n') {
     return Status::Corruption("CURRENT file does not end with newline");
   }
   // remove the trailing '\n'
   fname.resize(fname.size() - 1);
   FileType type;
+  // 从manifest文件名解析文件类型和文件编号
   bool parse_ok = ParseFileName(fname, manifest_file_number, &type);
   if (!parse_ok || type != kDescriptorFile) {
     return Status::Corruption("CURRENT file corrupted");
