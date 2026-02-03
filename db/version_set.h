@@ -1150,6 +1150,7 @@ class Version {
 
   VersionStorageInfo storage_info_;
   VersionSet* vset_;  // VersionSet to which this Version belongs
+  // 对SST的变更生成了一次VersionEdit 在时间序上形成双链表结构 每次有新生成一个VersionEdit就串到链表尾 然后把CF里面的current指针指过来
   Version* next_;     // Next version in linked list
   Version* prev_;     // Previous version in linked list
   int refs_;          // Number of live refs to this version
@@ -1692,6 +1693,7 @@ class VersionSet {
   // Protected by DB mutex.
   WalSet wals_;
 
+  // 持有一个CF set 这个里面又维护一个map<cf的编号, cf的信息> 在cf的信息里面用current指针指向一个Version双链表的结点 这个结点是最新的Version也就是CF最新的一次VersionEdit
   std::unique_ptr<ColumnFamilySet> column_family_set_;
   Cache* table_cache_;
   Env* const env_;

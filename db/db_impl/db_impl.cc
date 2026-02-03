@@ -257,6 +257,7 @@ DBImpl::DBImpl(const DBOptions& options, const std::string& dbname,
       PeriodicTaskType::kTriggerCompaction,
       [this]() { this->TriggerPeriodicCompaction(); });
 
+  // 构造数据库对象的时候构造一个默认的VersionSet
   versions_.reset(new VersionSet(
       dbname_, &immutable_db_options_, mutable_db_options_, file_options_,
       table_cache_.get(), write_buffer_manager_, &write_controller_,

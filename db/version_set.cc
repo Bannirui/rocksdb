@@ -5488,6 +5488,7 @@ void AtomicGroupReadBuffer::Clear() {
   replay_buffer_.clear();
 }
 
+// VersionSet的构造函数中会构造个默认的ColumnFamilySet 最终的Version就由它来管理
 VersionSet::VersionSet(
     const std::string& dbname, const ImmutableDBOptions* _db_options,
     const MutableDBOptions& mutable_db_options,

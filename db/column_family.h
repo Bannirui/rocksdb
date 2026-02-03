@@ -621,6 +621,7 @@ class ColumnFamilyData {
   uint32_t id_;
   const std::string name_;
   Version* dummy_versions_;  // Head of circular doubly-linked list of versions.
+  // 列簇的Version链表 这个current指针指向的是在链表中最新的 也就是链表尾的结点 每个Version链表结点就是真实的每次的VersionEdit
   Version* current_;         // == dummy_versions->prev_
 
   std::atomic<int> refs_;  // outstanding references to ColumnFamilyData
@@ -811,7 +812,9 @@ class ColumnFamilySet {
   // * when reading, at least one condition needs to be satisfied:
   // 1. DB mutex locked
   // 2. accessed from a single-threaded write thread
+  // 列簇名字映射到列簇编号
   UnorderedMap<std::string, uint32_t> column_families_;
+  // 列簇编号映射到列簇 在列簇的信息里面有个current指针 这个指针指向当前列最新的Version链表结点
   UnorderedMap<uint32_t, ColumnFamilyData*> column_family_data_;
 
   // Mutating / reading `running_ts_sz_` and `ts_sz_for_record_` follow
