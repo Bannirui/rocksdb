@@ -409,30 +409,6 @@ IOStatus Directories::SetDirectories(FileSystem* fs, const std::string& dbname,
   return IOStatus::OK();
 }
 
-/**
- * 把磁盘上的残骸恢复成一个可用的内存状态
- * 这些磁盘上的残骸包括
- * 1 manifest
- * 2 current
- * 3 sst
- * 4 wal
- * 5 cf metadata
- * 6 sequence number
- * 7 timestamp
- * 恢复的不是数据本身 而是恢复如何解释这些数据
- *
- * 整个恢复的过程可以看作两个部分组成
- * 1 用manifest恢复结构
- *   1.1 从CURRENT知道用哪个manifest文件
- *   1.2 顺序读manifest文件
- *   1.3 解析到manifest文件里面所有的VersionEdit
- *   1.4 构建全局唯一的VersionSet 为第个CF构建一个ColumnFamilyData
- * 每个ColumnFamilyData生成一个Current Version 1.5
- * Version描述的是每一层有哪些sst文件 每个sst文件的key range 2 用wal恢复数据 2.1
- * 根据VersionSet中的log_number找到需要回放的wal日志文件 2.2
- * 回放wal内容重建内存数据 2.3 flush内存数据生成sst文件 2.4
- * 通过新的VersionEdit把sst纳入到VersionSet
- */
 Status DBImpl::Recover(
     const std::vector<ColumnFamilyDescriptor>& column_families, bool read_only,
     bool error_if_wal_file_exists, bool error_if_data_exists_in_wals,
@@ -557,6 +533,7 @@ Status DBImpl::Recover(
   if (!immutable_db_options_.best_efforts_recovery) {
     // Status of reading the descriptor file
     Status desc_status;
+    // 从manifest中重建内存中的VersionSet
     s = versions_->Recover(column_families, read_only, &db_id_,
                            /*no_error_if_files_missing=*/false, is_retry,
                            &desc_status);
@@ -2436,7 +2413,7 @@ Status DBImpl::Open(const DBOptions& db_options, const std::string& dbname,
     preserve_info.Combine(cf.options);
   }
 
-  // db实例
+  // db对象
   auto impl = std::make_unique<DBImpl>(db_options, dbname, seq_per_batch,
                                        batch_per_txn);
   if (!impl->immutable_db_options_.info_log) {

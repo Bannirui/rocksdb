@@ -21,8 +21,14 @@
 
 namespace ROCKSDB_NAMESPACE {
 
+/**
+ *
+ * @param reader
+ * @param log_read_status
+ */
 void VersionEditHandlerBase::Iterate(log::Reader& reader,
                                      Status* log_read_status) {
+  // 每次拿到的Version的二进制
   Slice record;
   std::string scratch;
   assert(log_read_status);
@@ -30,9 +36,18 @@ void VersionEditHandlerBase::Iterate(log::Reader& reader,
 
   [[maybe_unused]] size_t recovered_edits = 0;
   Status s = Initialize();
+  /**
+   * manifest和回放主循环
+   * 3个条件
+   * 1 防止manifest文件损坏导致的无限读下去
+   * 2 任何一步有问题都停止读
+   * 3 是按record为单位读的 不是按照行 因为manifest不是普通的文本文件 是有格式的文件
+   * 4 防止Reader内部有错误
+   */
   while (reader.LastRecordEnd() < max_manifest_read_size_ && s.ok() &&
          reader.ReadRecord(&record, &scratch) && log_read_status->ok()) {
     VersionEdit edit;
+    // 从manifest中拿到的一个个日志记录 拿到的是二进制 反序列出来
     s = edit.DecodeFrom(record);
     if (s.ok()) {
       s = read_buffer_.AddEdit(&edit);

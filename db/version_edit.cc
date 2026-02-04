@@ -490,6 +490,10 @@ void VersionEdit::EncodeFileBoundaries(std::string* dst,
   PutLengthPrefixedSlice(dst, largest_buf);
 }
 
+/**
+ *
+ * @param src 二进制格式 从manifest中拿到的一个日志记录
+ */
 Status VersionEdit::DecodeFrom(const Slice& src) {
   Clear();
 #ifndef NDEBUG
@@ -506,15 +510,27 @@ Status VersionEdit::DecodeFrom(const Slice& src) {
   FileMetaData f;
   Slice str;
   InternalKey key;
+  /**
+   * manifest的VersionEdit 一个日志记录里面会有很多的tag-value 必须保证所有的tag-value都能成功解析
+   * 用msg记录解析失败的tag-value是谁 但凡有一个解析失败就返回失败
+   */
   while (msg == nullptr && GetVarint32(&input, &tag)) {
 #ifndef NDEBUG
     if (ignore_ignorable_tags && tag > kTagSafeIgnoreMask) {
+      // 这个地方是前向兼容的技巧 设置个分水岭 看到不认识的tag就打成固定标识 留给下面default分支处理
       tag = kTagSafeIgnoreMask;
     }
 #endif
+    // 拿到tag这个整数 tag不同value的解析也不同
     switch (tag) {
       case kDbId:
         if (GetLengthPrefixedSlice(&input, &str)) {
+          /**
+           * 这个就是标准的显式的TLV
+           * 1 tag是整数 先拿到tag
+           * 2 紧随的也是一个整数表示length
+           * 3 知道了value的长度就顺着拿出value
+           */
           db_id_ = str.ToString();
           has_db_id_ = true;
         } else {
@@ -825,9 +841,12 @@ Status VersionEdit::DecodeFrom(const Slice& src) {
       }
 
       default:
+        // 很巧妙的前向兼容处理方式 如果是老代码 前面拿到了tag判断超出了分水岭就会被赋值kTagSafeIgnoreMask 此时第13位被打上1保证进if分支
         if (tag & kTagSafeIgnoreMask) {
           // Tag from future which can be safely ignored.
           // The next field must be the length of the entry.
+          // 能被兼容的一定是显式TLV的格式 也就是L不能少的范式
+          // 拿到了不认识的tag 顺着tag拿出整数就认为是它的length 然后丢掉length对应的value 这么操作就等于是跳过了不认识的tag 做到了前向兼容
           uint32_t field_len;
           if (!GetVarint32(&input, &field_len) ||
               static_cast<size_t>(field_len) > input.size()) {
@@ -844,6 +863,7 @@ Status VersionEdit::DecodeFrom(const Slice& src) {
     }
   }
 
+  // 保证整个VersionEdit日志记录被解析完没有漏掉的tag-value
   if (msg == nullptr && !input.empty()) {
     msg = "invalid tag";
   }
