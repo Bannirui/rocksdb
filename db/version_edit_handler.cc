@@ -37,7 +37,7 @@ void VersionEditHandlerBase::Iterate(log::Reader& reader,
   [[maybe_unused]] size_t recovered_edits = 0;
   Status s = Initialize();
   /**
-   * manifest和回放主循环
+   * manifest的回放主循环
    * 3个条件
    * 1 防止manifest文件损坏导致的无限读下去
    * 2 任何一步有问题都停止读
@@ -47,15 +47,51 @@ void VersionEditHandlerBase::Iterate(log::Reader& reader,
   while (reader.LastRecordEnd() < max_manifest_read_size_ && s.ok() &&
          reader.ReadRecord(&record, &scratch) && log_read_status->ok()) {
     VersionEdit edit;
-    // 从manifest中拿到的一个个日志记录 拿到的是二进制 反序列出来
+    // 从manifest中拿到的一个个日志记录 拿到的是二进制 反序列出来得到对应的VersionEdit
     s = edit.DecodeFrom(record);
     if (s.ok()) {
+      // 这个缓冲区存在的意义是为了下面的事务提交服务的 先缓存着 要是同一个事务的VersionEdit收集满了就达到了一个回放的时机
       s = read_buffer_.AddEdit(&edit);
     }
     if (s.ok()) {
       ColumnFamilyData* cfd = nullptr;
+      // 一个VersionSet可能是单独的 也可能是属于一个事务组的
+      // 单独的好办直接回放到VersionSet就行
+      // 属于事务组的就要保证要么全部成功要么全部不要
       if (edit.IsInAtomicGroup()) {
+        /**
+         * 首先理解为什么VersionEdit会有事务概念
+         * 举个例子 现在发生一次sst的compaction
+         * 要把L1层的100.sst和L1层的101.sst合并成L2层的200.sst
+         * 在磁盘上的步骤是
+         * 1 写入200.sst
+         * 2 删除100.sst
+         * 3 删除101.sst
+         * 在manifest对应的应该就是3个VersionEdit
+         * 1 DeleteFile(L1, 100)
+         * 2 DeleteFile(L1, 101)
+         * 3 AddFile(L2, 200)
+         * 这3个VersionEdit就必须得是在一个事务里面保证在恢复VersionSet的时候是原子的
+         * 为什么呢 如果在2之后3之前宕机了 然后在重启恢复VersionSet的时候没以讲究事务语义就这么一条条VersionEdit进行恢复 最终重启后VersionSet里面
+         * 1 DeleteFile(L1, 100)=>L1的100.sst被删除了看不到了
+         * 2 DeleteFile(L1, 101)=>L1的101.sst被删除了看不到了
+         * 3 AddFile(L2, 200)=>crash导致没有被恢复到VersionSet VersionSet自然看不到L2的sst.200
+         * 所以这就必须要求事务的原子性
+         */
         if (read_buffer_.IsFull()) {
+          /**
+           * 一个事务组的VersionEdit凑齐了才一起回放到VersionSet里面
+           * 怎么保证事务呢 下面代码可以分成3个阶段 最核心的就for循环
+           * 1 OnAtomicGroupReplayBegin
+           * 2 for循环
+           * 3 OnAtomicGroupReplayEnd
+           * 这是标准的事务处理范式 但是那是针对恢复文件 需要在文件内容的开头跟结尾打上标识表示一个事务的完整性
+           * 但是现在是把VersionEdit恢复到VersionSet VersionSet是在内存里面 所以事情就变得简单了
+           * 在for循环逐个回放VersionEdit 只要但凡一个VersionEdit有问题就最终会导致s.ok()不成立
+           * 最终也会带着外层的while循环跳出进而当前函数返回false 调用方也会感知到恢复VersionSet这件事实 重启和Open失败
+           * 这个设计在工程上我觉得很合理
+           * 比如有3个VersionEdit在事务 回放到第2个的时候有问题了 也就是说内存操作出问题了 前面已经回放到内存上的那1个我自然不用管了 因为最终整个Open或者重启都会失败 整个进程都没的了
+           */
           s = OnAtomicGroupReplayBegin();
           for (size_t i = 0; s.ok() && i < read_buffer_.replay_buffer().size();
                i++) {

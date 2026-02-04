@@ -491,7 +491,8 @@ void VersionEdit::EncodeFileBoundaries(std::string* dst,
 }
 
 /**
- *
+ * 从manifest里面顺序的拿到很多个日志记录
+ * 每个日志记录都是原始的二进制 反序列化回来就是对应的一个VersionEdit
  * @param src 二进制格式 从manifest中拿到的一个日志记录
  */
 Status VersionEdit::DecodeFrom(const Slice& src) {
