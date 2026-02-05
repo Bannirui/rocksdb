@@ -108,10 +108,12 @@ inline const char* GetVarint32Ptr(const char* p, const char* limit,
   if (p < limit) {
     uint32_t result = *(lossless_cast<const unsigned char*>(p));
     if ((result & 128) == 0) {
+      // 数字小于127 当初编码的时候用的是1个字节
       *value = result;
       return p + 1;
     }
   }
+  // 数字>127 当初编码的时候用了多个字节
   return GetVarint32PtrFallback(p, limit, value);
 }
 
@@ -149,9 +151,17 @@ inline void PutFixed64(std::string* dst, uint64_t value) {
   }
 }
 
+/**
+ * 32位定长数字编码变长数字
+ * @param dst 放编码结果
+ * @param v 要编码的数字
+ */
 inline void PutVarint32(std::string* dst, uint32_t v) {
+  // 对于32位长度的数字 每7位占1字节 最多编码占5字节
   char buf[5];
+  // 数字v编码放到buf里面 编完后ptr指向的是编码结果的下一个位置 目的是要知道编码结果的长度是几个字节
   char* ptr = EncodeVarint32(buf, v);
+  // ptr-buf拿到编码结果是几个字节 放到dst里面
   dst->append(buf, static_cast<size_t>(ptr - buf));
 }
 
@@ -281,13 +291,20 @@ inline bool GetFixed16(Slice* input, uint16_t* value) {
   return true;
 }
 
+/**
+ * 解码
+ * @param input 要解码的对象 二进制 边解码边把解完的丢掉 最后拿到的是剩下还没解的二进制
+ * @param value 解码结果 数字
+ */
 inline bool GetVarint32(Slice* input, uint32_t* value) {
   const char* p = input->data();
   const char* limit = p + input->size();
+  // 解完的二进制会被丢掉 拿到的指针q是新的位置 可以直接顺着继续解码的位置
   const char* q = GetVarint32Ptr(p, limit, value);
   if (q == nullptr) {
     return false;
   } else {
+    // 解完的丢掉 更新要解码的对象
     *input = Slice(q, static_cast<size_t>(limit - q));
     return true;
   }
@@ -317,10 +334,25 @@ inline bool GetVarsignedint64(Slice* input, int64_t* value) {
   }
 }
 
+/**
+ * 约定了显式的LV并且length是32位整数
+ * 先解出整数看看多长
+ * 再解也具体的value
+ * @param input 编码
+ * @param result 解码结果
+ */
 inline bool GetLengthPrefixedSlice(Slice* input, Slice* result) {
+  // value的length
   uint32_t len = 0;
   if (GetVarint32(input, &len) && input->size() >= len) {
+    /**
+     * 这个if里面有两个代码
+     * 1 首先解出来32位数字length 拿到后input就被更新了 也就是说拿到了length后input里面顶在最前面的就是value
+     * 2 所以要校验保证剩下来还没解码的部分一定是足够length的 防御性校验二进制数据有损坏
+     */
+    // 拿出length长度的value
     *result = Slice(input->data(), len);
+    // 解完的value要丢掉
     input->remove_prefix(len);
     return true;
   } else {

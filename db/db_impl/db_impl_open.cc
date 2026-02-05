@@ -409,6 +409,10 @@ IOStatus Directories::SetDirectories(FileSystem* fs, const std::string& dbname,
   return IOStatus::OK();
 }
 
+/**
+ * 1 从manifest文件中重建内存中的VersionSet
+ * 2 从wal文件中那些还没flush到sst文件中的记录恢复内存数据库
+ */
 Status DBImpl::Recover(
     const std::vector<ColumnFamilyDescriptor>& column_families, bool read_only,
     bool error_if_wal_file_exists, bool error_if_data_exists_in_wals,
@@ -739,10 +743,12 @@ Status DBImpl::Recover(
       return s;
     }
 
+    // key=wal编号 val=wal文件路径
     std::unordered_map<uint64_t, std::string> wal_files;
     for (const auto& file : files_in_wal_dir) {
       uint64_t number;
       FileType type;
+      // 从wal文件名解析出来wal文件编号
       if (ParseFileName(file, &number, &type) && type == kWalFile) {
         if (is_new_db) {
           return Status::Corruption(
@@ -792,6 +798,7 @@ Status DBImpl::Recover(
       } else if (error_if_data_exists_in_wals) {
         for (auto& wal_file : wal_files) {
           uint64_t bytes;
+          // wal文件大小多少个byte
           s = env_->GetFileSize(wal_file.second, &bytes);
           if (s.ok()) {
             if (bytes > 0) {
@@ -806,11 +813,13 @@ Status DBImpl::Recover(
 
     if (!wal_files.empty()) {
       // Recover in the order in which the wals were generated
+      // 放wal文件编号
       std::vector<uint64_t> wals;
       wals.reserve(wal_files.size());
       for (const auto& wal_file : wal_files) {
         wals.push_back(wal_file.first);
       }
+      // wal文件编号升序
       std::sort(wals.begin(), wals.end());
 
       bool corrupted_wal_found = false;
@@ -1127,6 +1136,10 @@ void DBOpenLogRecordReadReporter::OldLogRecord(size_t bytes) {
 }
 
 // REQUIRES: wal_numbers are sorted in ascending order
+/**
+ *
+ * @param wal_numbers wal文件编号升序
+ */
 Status DBImpl::RecoverLogFiles(const std::vector<uint64_t>& wal_numbers,
                                SequenceNumber* next_sequence, bool read_only,
                                bool is_retry, bool* corrupted_wal_found,
@@ -1246,6 +1259,7 @@ Status DBImpl::ProcessLogFile(
   DBOpenLogRecordReadReporter reporter;
   std::unique_ptr<log::Reader> reader;
 
+  // wal文件路径
   std::string fname =
       LogFileName(immutable_db_options_.GetWalDir(), wal_number);
 

@@ -6486,6 +6486,12 @@ Status VersionSet::LogAndApplyHelper(ColumnFamilyData* cfd,
   return builder ? builder->Apply(edit) : Status::OK();
 }
 
+/**
+ * 1 从CURRENT文件读出来manifest文件名
+ * 2 找到manifest文件读出来日志记录
+ * 3 把日志记录反序列化成VersionEdit
+ * 4 把VersionEdit回放到VersionSet
+ */
 Status VersionSet::Recover(
     const std::vector<ColumnFamilyDescriptor>& column_families, bool read_only,
     std::string* db_id, bool no_error_if_files_missing, bool is_retry,

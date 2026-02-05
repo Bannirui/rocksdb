@@ -78,6 +78,7 @@ class Slice {
   }
 
   // Drop the first "n" bytes from this slice.
+  // 丢掉低地址的n个字节 编解码的时候要边解边丢
   void remove_prefix(size_t n) {
     assert(n <= size());
     data_ += n;
@@ -125,6 +126,9 @@ class Slice {
   size_t difference_offset(const Slice& b) const;
 
   // private: make these public for rocksdbjni access
+  // 我认为Slice要持有字符串指针而不是引用或值有两个原因
+  // 1 指针占内存小 避免拷贝开销
+  // 2 可以直接操作 也是主要原因 因为在编解码层面操作的就是Slice 需要有能力编解码完一个字节就丢掉一个字节 达到流式效果
   const char* data_;
   size_t size_;
 
