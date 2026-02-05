@@ -46,6 +46,7 @@ void VersionEditHandlerBase::Iterate(log::Reader& reader,
    */
   while (reader.LastRecordEnd() < max_manifest_read_size_ && s.ok() &&
          reader.ReadRecord(&record, &scratch) && log_read_status->ok()) {
+    // 从manifest文件读 读取单位是record
     VersionEdit edit;
     // 从manifest中拿到的一个个日志记录 拿到的是二进制 反序列出来得到对应的VersionEdit
     s = edit.DecodeFrom(record);

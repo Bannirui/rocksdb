@@ -22,11 +22,16 @@ namespace log {
 enum RecordType : uint8_t {
   // Zero is reserved for preallocated files
   kZeroType = 0,
+  // 一个record刚好在一个chunk里面
   kFullType = 1,
 
   // For fragments
+  // 一个record在几个chunk里面 跨chunk的时候标记chunk在record这几个chunk的位置
+  // record的第一个chunk
   kFirstType = 2,
+  // record的中间chunk
   kMiddleType = 3,
+  // record的最后一个chunk
   kLastType = 4,
 
   // For recycled log files
@@ -51,6 +56,7 @@ enum RecordType : uint8_t {
 constexpr uint8_t kRecordTypeSafeIgnoreMask = 1 << 7;
 constexpr uint8_t kMaxRecordType = kRecyclePredecessorWALInfoType;
 
+// 物理层的磁盘存储单位是扇区 操作系统读写单位是block 32KB
 constexpr unsigned int kBlockSize = 32768;
 
 // Header is checksum (4 bytes), length (2 bytes), type (1 byte)

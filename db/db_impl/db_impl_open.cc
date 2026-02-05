@@ -1325,6 +1325,7 @@ Status DBImpl::ProcessLogFile(
       break;
     }
 
+    // 从wal日志读 读取单位是日志记录
     bool read_record = reader->ReadRecord(
         &record, &scratch, immutable_db_options_.wal_recovery_mode,
         &record_checksum);

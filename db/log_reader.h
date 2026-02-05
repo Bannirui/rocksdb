@@ -139,17 +139,27 @@ class Reader {
   char* const backing_store_;
 
   // Internal state variables used for reading records
+  // 缓存着从操作系统读到的数据 这个地方用的是Slice 相当于持有的是真实内存的指针副本 推进指针移动的语义是哪些数据已经被LogReader处理完 并不负责物理内存的释放
   Slice buffer_;
+  // 每次读文件的时候都会指定最多读32KB 如果实际读到的内容大小不到32KB 说明文件已经被读完了
   bool eof_;         // Last Read() indicated EOF by returning < kBlockSize
   bool read_error_;  // Error occurred while reading from file
 
   // Offset of the file position indicator within the last block when an
   // EOF was detected.
+  // 上面eof标识文件已经被读完了 那么结束位置在哪儿 比如一个block是32KB 读到了2字节 说明结束符就在这个block的2字节处
   size_t eof_offset_;
 
   // Offset of the last record returned by ReadRecord.
   uint64_t last_record_offset_;
   // Offset of the first location past the end of buffer_.
+  // LogReader每次发起读请求 都会最多从操作系统拿到32kb 实际读到多少取决于文件剩下多少 所以从LogReader视角它每次读完都更新一下这个成员
+  // LogReader对接两头 一头操作系统 一头想要读record
+  // 持有一个成员buffer 把这个buffer头尾想象成两个指针 就等于两个指针把区域分割成3个部分
+  // [...buffer) [buffer...end_of_buffer_offset) [end_of_buffer_offset...]
+  // 第1个部分 已经被消费成record
+  // 第2个部分 从操作系统读到还没消费的数据
+  // 第3个部分 还没从操作系统读
   uint64_t end_of_buffer_offset_;
 
   // which log number this is

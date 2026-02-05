@@ -75,6 +75,17 @@ Reader::~Reader() {
 // TODO (hx235): move `wal_recovery_mode` to be a member data like other
 // information (e.g, `stop_replay_for_corruption`) to decide whether to
 // check for and surface corruption in `ReadRecord()`
+/**
+ * 从文件里面读一个record出来
+ * 1 record是RocksDB抽象的概念 给wal和manifest用
+ * 2 不关注怎么跟操作系统的文件系统交互的
+ *   2.1 实际上每次跟操作系统读写单位是block
+ *   2.2 RocksDB还抽象了fragment概念 1个block分割成多个fragment
+ *   2.3 1个record可能是由1个或多个fragment组成
+ * 3 最终出参record收到的是一个完整的record
+ * @param record RocksDB抽象的概念 它由一个或多个fragment组成
+ * @param scratch 当record是由多个fragment组成的时候 它是用来当缓冲区不断拼接fragment 等整个record收集全了
+ */
 bool Reader::ReadRecord(Slice* record, std::string* scratch,
                         WALRecoveryMode wal_recovery_mode,
                         uint64_t* record_checksum) {
@@ -89,15 +100,30 @@ bool Reader::ReadRecord(Slice* record, std::string* scratch,
   if (uncompress_) {
     uncompress_->Reset();
   }
+  /**
+   * 这个标识的作用是拼接多个fragment的依赖
+   * 1 record就是一个fragment 这个标识用不到
+   * 2 record由多个fragment组成 那就意味着读到fragment的时候要拼成record
+   *   fragment标识是record头 就要打上这个标识为true
+   *   fragment标识是record中间 就继续拼接
+   *   fragment标识是record尾 整个record就收集全了
+   */
   bool in_fragmented_record = false;
   // Record offset of the logical record that we're reading
   // 0 is a dummy value to make compilers happy
   uint64_t prospective_record_offset = 0;
 
+  // LogReader对应的逻辑概念是RocksDB的record
+  // 文件系统的读写单位是Block 因此RocksDB又建立了fragment概念
+  // 1 文件系统的chunk是由多个block组成
+  // 2 多个RocksDB的fragment组成block
+  // 3 record由一个或多个fragment组成
+  // LogReader对外交互的是record 跟系统对内交互的是block 因此它需要把block分割成多个fragment 然后再尝试组装成record
   Slice fragment;
   for (;;) {
     uint64_t physical_record_offset = end_of_buffer_offset_ - buffer_.size();
     size_t drop_size = 0;
+    // 读一个fragment出来
     const uint8_t record_type =
         ReadPhysicalRecord(&fragment, &drop_size, record_checksum);
     switch (record_type) {
@@ -119,6 +145,7 @@ bool Reader::ReadRecord(Slice* record, std::string* scratch,
         }
         prospective_record_offset = physical_record_offset;
         scratch->clear();
+      // 当前fragment就是一个record 这种情况最简单
         *record = fragment;
         last_record_offset_ = prospective_record_offset;
         first_record_read_ = true;
@@ -138,6 +165,7 @@ bool Reader::ReadRecord(Slice* record, std::string* scratch,
           XXH3_64bits_update(hash_state_, fragment.data(), fragment.size());
         }
         prospective_record_offset = physical_record_offset;
+      // fragment是record头 fragment丢到缓冲区 等着后续的fragment拼接进来 打上标识让后面的fragment知道record正在收集fragment
         scratch->assign(fragment.data(), fragment.size());
         in_fragmented_record = true;
         break;  // switch
@@ -145,12 +173,14 @@ bool Reader::ReadRecord(Slice* record, std::string* scratch,
       case kMiddleType:
       case kRecyclableMiddleType:
         if (!in_fragmented_record) {
+          // 防御性校验
           ReportCorruption(fragment.size(),
                            "missing start of fragmented record(1)");
         } else {
           if (record_checksum != nullptr) {
             XXH3_64bits_update(hash_state_, fragment.data(), fragment.size());
           }
+          // 当前fragment是record中间的某个fragment 拼接到record里面
           scratch->append(fragment.data(), fragment.size());
         }
         break;  // switch
@@ -158,6 +188,7 @@ bool Reader::ReadRecord(Slice* record, std::string* scratch,
       case kLastType:
       case kRecyclableLastType:
         if (!in_fragmented_record) {
+          // 防御性校验 当前fragment是record的最后一个 那么必须保证当前record明确标识由多个fragment组成
           ReportCorruption(fragment.size(),
                            "missing start of fragmented record(2)");
         } else {
@@ -165,6 +196,7 @@ bool Reader::ReadRecord(Slice* record, std::string* scratch,
             XXH3_64bits_update(hash_state_, fragment.data(), fragment.size());
             *record_checksum = XXH3_64bits_digest(hash_state_);
           }
+          // 当前fragment是record的尾 拼接上去就收集全了record
           scratch->append(fragment.data(), fragment.size());
           *record = Slice(*scratch);
           last_record_offset_ = prospective_record_offset;
@@ -508,6 +540,12 @@ void Reader::ReportOldLogRecord(size_t bytes) {
   }
 }
 
+/**
+ * 尝试从文件上读1个block 32kb大小 实际读到多少看文件系统的文件实际情况
+ * @param drop_size 比如文件明明已经被读完了 理论上已经没有东西了 但是当前buffer里面可能还残留了数据 会被丢掉
+ * @param error 没读到的原因 比如文件已经被读完了
+ * @return 没读成功
+ */
 bool Reader::ReadMore(size_t* drop_size, uint8_t* error) {
   if (!eof_ && !read_error_) {
     // Last read was a full read, so this is a trailer to skip
@@ -517,6 +555,7 @@ bool Reader::ReadMore(size_t* drop_size, uint8_t* error) {
     // Note that the Read here might overcharge SequentialFileReader's internal
     // rate limiter if priority is not IO_TOTAL, e.g., when there is not enough
     // content left until EOF to read.
+    // 从文件中最读32KB 实际读到了多少数据看buffer里面被填了多少
     Status status = file_->Read(kBlockSize, &buffer_, backing_store_,
                                 Env::IO_TOTAL /* rate_limiter_priority */);
     TEST_SYNC_POINT_CALLBACK("LogReader::ReadMore:AfterReadFile", &status);
@@ -528,6 +567,7 @@ bool Reader::ReadMore(size_t* drop_size, uint8_t* error) {
       *error = kEof;
       return false;
     } else if (buffer_.size() < static_cast<size_t>(kBlockSize)) {
+      // 想读32KB 实际读到的不到32KB 说明物理层的文件已经被读完了
       eof_ = true;
       eof_offset_ = buffer_.size();
     }
@@ -549,6 +589,13 @@ bool Reader::ReadMore(size_t* drop_size, uint8_t* error) {
   }
 }
 
+/**
+ * 这个函数是的RocksDB到操作系统中间的一层 并不是每次都直接读文件 它是流的概念 从文件里面一次读到一个Block 32KB
+ * 里面可能会包含很多个fragment 每次拿到一个fragment
+ * 拿到的chunk可能刚好就是一个record 也可能是一个record的其中一个chunk
+ * @param result 读文件读到的chunk里面的body
+ * @return chunk的type 这个标识在chunk的header里面
+ */
 uint8_t Reader::ReadPhysicalRecord(Slice* result, size_t* drop_size,
                                    uint64_t* fragment_checksum) {
   while (true) {
@@ -558,7 +605,9 @@ uint8_t Reader::ReadPhysicalRecord(Slice* result, size_t* drop_size,
       // it if it returns false; in case it returns true, the return value will
       // not be used anyway
       uint8_t r = kEof;
+      // 尝试读一个block 32kb
       if (!ReadMore(drop_size, &r)) {
+        // 没读到的原因
         return r;
       }
       continue;
@@ -566,6 +615,8 @@ uint8_t Reader::ReadPhysicalRecord(Slice* result, size_t* drop_size,
 
     // Parse the header
     const char* header = buffer_.data();
+    // header一共7字节 4字节checksum+2字节length+1字节type+对应长度的body
+    // 小端序 length是2个字节 先拿到低地址上的1个字节做低位 再拿高地址上的1字节做高位
     const uint32_t a = static_cast<uint32_t>(header[4]) & 0xff;
     const uint32_t b = static_cast<uint32_t>(header[5]) & 0xff;
     const uint8_t type = static_cast<uint8_t>(header[6]);
@@ -636,6 +687,8 @@ uint8_t Reader::ReadPhysicalRecord(Slice* result, size_t* drop_size,
       }
     }
 
+    // 推进指针 表示这个chunk已经被LogReader处理完了 我不要再继续看到他们了 那么下一次再看到的就是下一个chunk了
+    // 实际上这个chunk的起始地址已经在上面用header指针记录了
     buffer_.remove_prefix(header_size + length);
 
     if (!uncompress_ || type == kSetCompressionType ||
@@ -643,6 +696,7 @@ uint8_t Reader::ReadPhysicalRecord(Slice* result, size_t* drop_size,
         type == kRecyclePredecessorWALInfoType ||
         type == kUserDefinedTimestampSizeType ||
         type == kRecyclableUserDefinedTimestampSizeType) {
+      // 上面用header记录了这个chunk的起始地址 跳过这个chunk的header 我只要它的body 把body拿出来放到result里面就是调用方拿到数据
       *result = Slice(header + header_size, length);
       return type;
     } else {
