@@ -542,7 +542,8 @@ void Reader::ReportOldLogRecord(size_t bytes) {
 
 /**
  * 尝试从文件上读1个block 32kb大小 实际读到多少看文件系统的文件实际情况
- * @param drop_size 比如文件明明已经被读完了 理论上已经没有东西了 但是当前buffer里面可能还残留了数据 会被丢掉
+ * @param drop_size 比如文件明明已经被读完了 理论上已经没有东西了
+ * 但是当前buffer里面可能还残留了数据 会被丢掉
  * @param error 没读到的原因 比如文件已经被读完了
  * @return 没读成功
  */

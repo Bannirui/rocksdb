@@ -1145,10 +1145,15 @@ Status DBImpl::RecoverLogFiles(const std::vector<uint64_t>& wal_numbers,
                                bool is_retry, bool* corrupted_wal_found,
                                RecoveryContext* recovery_ctx) {
   mutex_.AssertHeld();
-
+  /**
+   * 函数出参 提前准备好用来放CF的VersionEdit
+   * 为什么需要这个VersionEdit
+   * 在回放wal的过程中可能会导致数据持久化到sst 就会触发VersionEdit 等整个wal回放结束就要把VersionEdit再加到manifest里面
+   */
   std::unordered_map<int, VersionEdit> version_edits;
   int job_id = 0;
   uint64_t min_wal_number = 0;
+  // 准备工作
   SetupLogFilesRecovery(wal_numbers, &version_edits, &job_id, &min_wal_number);
 
   Status status = ProcessLogFiles(
@@ -1159,6 +1164,13 @@ Status DBImpl::RecoverLogFiles(const std::vector<uint64_t>& wal_numbers,
   return status;
 }
 
+/**
+ * 为wal的恢复做准备工作 提前给每个CF准备好一个VersionEdit
+ * 因为在wal的回放过程中 可能会触发某些cf数据持久化到sst里面进而产生新的VersionEdit
+ * 因为提前不知道会不会产生VersionEdit以及是哪个CF的VersionEdit 所以要提前给每个CF准备一个容身之处
+ * 所以这个地方要收集的VersionEdit是在整个wal过程中的增量
+ * @param version_edits 调用方传进来的出参
+ */
 void DBImpl::SetupLogFilesRecovery(
     const std::vector<uint64_t>& wal_numbers,
     std::unordered_map<int, VersionEdit>* version_edits, int* job_id,
@@ -1168,6 +1180,7 @@ void DBImpl::SetupLogFilesRecovery(
   assert(min_wal_number);
   // No need to refcount because iteration is under mutex
   for (auto cfd : *versions_->GetColumnFamilySet()) {
+    // 给每个CF都准备一个VersionEdit壳子 如果在wal过程中发生了sst变更就更新这个VersionEdit 最终wal结束 这个VersionEdit就是wal过程中的增量
     VersionEdit edit;
     edit.SetColumnFamily(cfd->GetID());
     version_edits->insert({cfd->GetID(), edit});
@@ -1197,6 +1210,10 @@ void DBImpl::SetupLogFilesRecovery(
   }
 }
 
+/**
+ *
+ * @param version_edits 用来收集CF的VersionEdit的过程差量 最终定格成CF的终量
+ */
 Status DBImpl::ProcessLogFiles(
     const std::vector<uint64_t>& wal_numbers, bool read_only, bool is_retry,
     uint64_t min_wal_number, int job_id, SequenceNumber* next_sequence,
@@ -2481,6 +2498,7 @@ Status DBImpl::Open(const DBOptions& db_options, const std::string& dbname,
 
   // Handles create_if_missing, error_if_exists
   uint64_t recovered_seq(kMaxSequenceNumber);
+  // 从manifest中重建VersionSet 从wal中重建内存数据
   s = impl->Recover(column_families, false /* read_only */,
                     false /* error_if_wal_file_exists */,
                     false /* error_if_data_exists_in_wals */, is_retry,
