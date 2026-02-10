@@ -3396,11 +3396,17 @@ class ProtectionInfoUpdater : public WriteBatch::Handler {
 };
 
 }  // anonymous namespace
-
+/**
+ * 构建WriteBatch逻辑协议
+ * wal读出来的原始record字节写到WriteBatch里面
+ * @param b WriteBatch逻辑协议
+ * @param contents 从wal日志里面解析出来的二进制 剥去了物理协议头后的内容
+ */
 Status WriteBatchInternal::SetContents(WriteBatch* b, const Slice& contents) {
+  // WriteBatch逻辑协议有头 用协议头简单校验一下协议结构完整
   assert(contents.size() >= WriteBatchInternal::kHeader);
   assert(b->prot_info_ == nullptr);
-
+  // 覆盖写
   b->rep_.assign(contents.data(), contents.size());
   b->content_flags_.store(ContentFlags::DEFERRED, std::memory_order_relaxed);
   return Status::OK();

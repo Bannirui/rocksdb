@@ -1453,6 +1453,20 @@ class VersionSet {
   // In non-2PC mode, all the log numbers smaller than this number can be safely
   // deleted, although we still use `min_log_number_to_keep_` to determine when
   // to delete a WAL file.
+  /**
+   * wal恢复memory table的要求下限 这是数据安全级别的要求 能保证的是恢复memory table的一致性 这个要求是宽泛的
+   * 如果是事务的两阶段提交 那么就要更严格的系统级的要求下限 保证memory table恢复一致+事务完整
+   *
+   * 为什么这个地方要讨论两阶段提交
+   * wal的唯一用途就是恢复memory table 也就意味着一旦memory table里面的数据flush到了sst文件 wal文件的使命就完成了可以删除了
+   * 两阶段提交的时候
+   * 1 prepare阶段写入了wal
+   * 2 此时还没完成commit所以数据对外是不可见的
+   * 3 commit可能在未来的wal中
+   * 所以如果只从memory table有没有flush到sst来判定wal可不可以删除 会导致prepare了还没commit的数据丢失 导致事务语义被破坏
+   * 所以在两阶段提交模式下 wal的用途不单单是保证memory table能恢复一致 还用于事务状态机的恢复
+   * 所以在两阶段下wal日志要更严格
+   */
   uint64_t MinLogNumberWithUnflushedData() const {
     return PreComputeMinLogNumberWithUnflushedData(nullptr);
   }

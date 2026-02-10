@@ -542,6 +542,11 @@ class WriteBatch : public WriteBatchBase {
   std::unordered_map<uint32_t, size_t> cf_id_to_ts_sz_;
 
  protected:
+  /**
+   * WriteBatch逻辑协议=协议头+协议体
+   * wal日志读出来Block->分割成fragment物理协议->刨去物理协议头拿到fragment协议体->拼成record->就是WriteBatch逻辑协议
+   * 这个里面存放的就是WriteBatch逻辑协议的二进制
+   */
   std::string rep_;  // See comment in write_batch.cc for the format of rep_
 };
 

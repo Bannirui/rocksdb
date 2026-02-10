@@ -24,6 +24,19 @@
 
 namespace ROCKSDB_NAMESPACE {
 
+/**
+ * 这是系统级的wal要求下限 保证memory table恢复一致+事务完整
+ * wal的编号要求分系统级要求和数据安全级要求两个
+ * 1 系统级要求比数据安全级的高 也就是系统级的wal编号小于数据安全级别的wal编号
+ * 2 数据安全级的wal编号只能用来做memory table恢复一致性
+ * 3 系统级别的wal编号还可以用不保证事务语义保证
+ *
+ * 1 如果wal日志删除早了 会导致数据永久丢失
+ * 2 如果wal日志删除晚了 会导致数据冗余在磁盘上浪费磁盘空间
+ * 本质是支撑着未flush数据的最早wal
+ * 只要一个wal对应的数据已经flush成sst并且被Version管理了那么这个wal就不用再参与到恢复
+ * @return 系统crash后 为了恢复到一致状态+事务状态完整 必须保留的最早的wal日志
+ */
 uint64_t DBImpl::MinLogNumberToKeep() {
   return versions_->min_log_number_to_keep();
 }

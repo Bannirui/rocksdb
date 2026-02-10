@@ -1,0 +1,46 @@
+//
+// Created by rui ding on 2026/1/26.
+//
+
+#include <rocksdb/db.h>
+#include <rocksdb/options.h>
+
+#include <cassert>
+#include <iostream>
+
+int main() {
+  rocksdb::Options options;
+  options.create_if_missing = true;
+
+  // 不在options中显式制定wal的目录就会用db_path
+  std::string dbName = "/tmp/write_batch_wal_test";
+  std::string walDir = dbName + "/wal";
+  std::string sstDir = dbName + "/sst";
+  options.wal_dir = walDir;
+  std::vector<rocksdb::DbPath> sstPaths = {{sstDir + "/flash_path", 512},
+                                           {sstDir + "/hard_drive", 1024}};
+  options.db_paths = sstPaths;
+
+  // sst目录属于资源目录 RocksDB不会帮我创建 要自己创建好
+  auto* env = rocksdb::Env::Default();
+  env->CreateDirIfMissing(dbName);
+  env->CreateDirIfMissing(walDir);
+  env->CreateDirIfMissing(sstDir);
+  env->CreateDirIfMissing(sstDir + "/flash_path");
+  env->CreateDirIfMissing(sstDir + "/hard_drive");
+
+  std::unique_ptr<rocksdb::DB> db;
+  auto s = rocksdb::DB::Open(options, dbName, &db);
+  assert(s.ok());
+
+  rocksdb::WriteBatch batch;
+  for (int i = 0; i < 10; ++i) {
+    batch.Put("hello" + std::to_string(i),
+              "world" + std::to_string(i));
+  }
+  rocksdb::WriteOptions write_opts;
+  write_opts.sync = false;
+  s = db->Write(write_opts, &batch);
+  // 不要flush 然后就可以在wal目录下看到对应的文件
+  return 0;
+}

@@ -76,14 +76,16 @@ Reader::~Reader() {
 // information (e.g, `stop_replay_for_corruption`) to decide whether to
 // check for and surface corruption in `ReadRecord()`
 /**
- * 从文件里面读一个record出来
+ * 从文件里面读一个record出来 record就是逻辑层协议
  * 1 record是RocksDB抽象的概念 给wal和manifest用
  * 2 不关注怎么跟操作系统的文件系统交互的
  *   2.1 实际上每次跟操作系统读写单位是block
  *   2.2 RocksDB还抽象了fragment概念 1个block分割成多个fragment
  *   2.3 1个record可能是由1个或多个fragment组成
  * 3 最终出参record收到的是一个完整的record
- * @param record RocksDB抽象的概念 它由一个或多个fragment组成
+ * @param record RocksDB抽象的概念 它由一个或多个fragment组成 已经被剥掉了物理层协议头7字节 现在就是物理层协议体的原始字节 变成了逻辑层协议
+ *               对于manifest 此时的逻辑协议没有协议头 就直接是VersionEdit信息
+ *               对于wal 此时的逻辑协议又是WriteBatch协议头+body的设计 逻辑协议头12字节
  * @param scratch 当record是由多个fragment组成的时候 它是用来当缓冲区不断拼接fragment 等整个record收集全了
  */
 bool Reader::ReadRecord(Slice* record, std::string* scratch,
@@ -123,7 +125,7 @@ bool Reader::ReadRecord(Slice* record, std::string* scratch,
   for (;;) {
     uint64_t physical_record_offset = end_of_buffer_offset_ - buffer_.size();
     size_t drop_size = 0;
-    // 读一个fragment出来
+    // 读一个fragment出来 物理层协议体
     const uint8_t record_type =
         ReadPhysicalRecord(&fragment, &drop_size, record_checksum);
     switch (record_type) {
@@ -593,9 +595,9 @@ bool Reader::ReadMore(size_t* drop_size, uint8_t* error) {
 /**
  * 这个函数是的RocksDB到操作系统中间的一层 并不是每次都直接读文件 它是流的概念 从文件里面一次读到一个Block 32KB
  * 里面可能会包含很多个fragment 每次拿到一个fragment
- * 拿到的chunk可能刚好就是一个record 也可能是一个record的其中一个chunk
- * @param result 读文件读到的chunk里面的body
- * @return chunk的type 这个标识在chunk的header里面
+ * 拿到的fragment可能刚好就是一个record 也可能是一个record的其中一个fragment
+ * @param result 读文件读到的fragment里面的body的原始字节 已经剥掉了物理层协议头7字节
+ * @return fragment的type 这个标识在fragment的header里面
  */
 uint8_t Reader::ReadPhysicalRecord(Slice* result, size_t* drop_size,
                                    uint64_t* fragment_checksum) {
@@ -621,6 +623,7 @@ uint8_t Reader::ReadPhysicalRecord(Slice* result, size_t* drop_size,
     const uint32_t a = static_cast<uint32_t>(header[4]) & 0xff;
     const uint32_t b = static_cast<uint32_t>(header[5]) & 0xff;
     const uint8_t type = static_cast<uint8_t>(header[6]);
+    // 跳过协议头 协议体的长度
     const uint32_t length = a | (b << 8);
     int header_size = kHeaderSize;
     const bool is_recyclable_type =
@@ -688,8 +691,8 @@ uint8_t Reader::ReadPhysicalRecord(Slice* result, size_t* drop_size,
       }
     }
 
-    // 推进指针 表示这个chunk已经被LogReader处理完了 我不要再继续看到他们了 那么下一次再看到的就是下一个chunk了
-    // 实际上这个chunk的起始地址已经在上面用header指针记录了
+    // 推进指针 表示这个fragment已经被LogReader处理完了 我不要再继续看到他们了 那么下一次再看到的就是下一个fragment了
+    // 实际上这个fragment的起始地址已经在上面用header指针记录了
     buffer_.remove_prefix(header_size + length);
 
     if (!uncompress_ || type == kSetCompressionType ||
@@ -697,7 +700,7 @@ uint8_t Reader::ReadPhysicalRecord(Slice* result, size_t* drop_size,
         type == kRecyclePredecessorWALInfoType ||
         type == kUserDefinedTimestampSizeType ||
         type == kRecyclableUserDefinedTimestampSizeType) {
-      // 上面用header记录了这个chunk的起始地址 跳过这个chunk的header 我只要它的body 把body拿出来放到result里面就是调用方拿到数据
+      // 上面用header记录了这个fragment的起始地址 跳过这个fragment的header 我只要它的body 把body拿出来放到result里面就是调用方拿到数据
       *result = Slice(header + header_size, length);
       return type;
     } else {

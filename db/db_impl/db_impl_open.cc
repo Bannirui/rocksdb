@@ -1139,6 +1139,7 @@ void DBOpenLogRecordReadReporter::OldLogRecord(size_t bytes) {
 /**
  *
  * @param wal_numbers wal文件编号升序
+ * @param next_sequence 出参 下一个合法可分配的序号 wal恢复回放期间不断推进 保证后续写入不会冲突
  */
 Status DBImpl::RecoverLogFiles(const std::vector<uint64_t>& wal_numbers,
                                SequenceNumber* next_sequence, bool read_only,
@@ -1169,7 +1170,8 @@ Status DBImpl::RecoverLogFiles(const std::vector<uint64_t>& wal_numbers,
  * 因为在wal的回放过程中 可能会触发某些cf数据持久化到sst里面进而产生新的VersionEdit
  * 因为提前不知道会不会产生VersionEdit以及是哪个CF的VersionEdit 所以要提前给每个CF准备一个容身之处
  * 所以这个地方要收集的VersionEdit是在整个wal过程中的增量
- * @param version_edits 调用方传进来的出参
+ * @param version_edits 出参 给每个CF准备一个空VersionEdit
+ * @param min_wal_number 出参 最小的wal日志序号要求
  */
 void DBImpl::SetupLogFilesRecovery(
     const std::vector<uint64_t>& wal_numbers,
@@ -1202,7 +1204,9 @@ void DBImpl::SetupLogFilesRecovery(
   // No-op for immutable_db_options_.wal_filter == nullptr.
   InvokeWalFilterIfNeededOnColumnFamilyToWalNumberMap();
 
+  // 为了崩溃后能恢复到一致状态 必须保存的最小编号的wal日志
   *min_wal_number = MinLogNumberToKeep();
+  // 为什么这个地方要讨论两阶段提交 事务对wal日志要求的下限更严格
   if (!allow_2pc()) {
     // In non-2pc mode, we skip WALs that do not back unflushed data.
     *min_wal_number =
@@ -1211,7 +1215,8 @@ void DBImpl::SetupLogFilesRecovery(
 }
 
 /**
- *
+ * @param min_wal_number 入参
+ * @param next_sequence 出参 下一个合法可分配的序号 wal恢复回放期间不断推进 保证后续写入不会冲突
  * @param version_edits 用来收集CF的VersionEdit的过程差量 最终定格成CF的终量
  */
 Status DBImpl::ProcessLogFiles(
@@ -1260,6 +1265,22 @@ Status DBImpl::ProcessLogFiles(
   return status;
 }
 
+/**
+ *
+ * @param wal_number wal文件的序号
+ * @param min_wal_number 入参 wal的编号下限
+ * @param is_retry
+ * @param read_only
+ * @param job_id
+ * @param next_sequence 出参 下一个合法可分配的序号 wal恢复回放期间不断推进 保证后续写入不会冲突
+ * @param stop_replay_for_corruption
+ * @param stop_replay_by_wal_filter
+ * @param corrupted_wal_number
+ * @param corrupted_wal_found
+ * @param version_edits
+ * @param flushed
+ * @param predecessor_wal_info
+ */
 Status DBImpl::ProcessLogFile(
     uint64_t wal_number, uint64_t min_wal_number, bool is_retry, bool read_only,
     int job_id, SequenceNumber* next_sequence, bool* stop_replay_for_corruption,
@@ -1318,6 +1339,7 @@ Status DBImpl::ProcessLogFile(
     return status;
   }
 
+  // 用来读wal文件
   Status init_status = InitializeLogReader(
       wal_number, is_retry, fname, *stop_replay_for_corruption, min_wal_number,
       predecessor_wal_info, &old_log_record, &status, &reporter, reader);
@@ -1342,7 +1364,7 @@ Status DBImpl::ProcessLogFile(
       break;
     }
 
-    // 从wal日志读 读取单位是日志记录
+    // 从wal日志读 读取一个record出来 就是WriteBatch协议
     bool read_record = reader->ReadRecord(
         &record, &scratch, immutable_db_options_.wal_recovery_mode,
         &record_checksum);
@@ -1457,6 +1479,29 @@ Status DBImpl::InitializeLogReader(
   return status;
 }
 
+/**
+ *
+ * @param record 从wal文件里面读到的record 已经去掉了物理协议头 就是WriteBatch逻辑协议
+ * @param reader
+ * @param running_ts_sz
+ * @param wal_number
+ * @param fname
+ * @param read_only
+ * @param job_id
+ * @param logFileDropped
+ * @param reporter
+ * @param record_checksum
+ * @param last_seqno_observed 出参 在恢复过程中wal文件中record最大的序号
+ * 不是全局的而是恢复过程中观察到的
+ * @param next_sequence 出参 下一个合法可分配的序号
+ * 恢复过程中不断推进保证后续的写入不会冲突
+ * @param stop_replay_for_corruption
+ * @param status
+ * @param stop_replay_by_wal_filter
+ * @param version_edits
+ * @param flushed
+ * @return
+ */
 Status DBImpl::ProcessLogRecord(
     Slice record, const std::unique_ptr<log::Reader>& reader,
     const UnorderedMap<uint32_t, size_t>& running_ts_sz, uint64_t wal_number,
@@ -1474,18 +1519,25 @@ Status DBImpl::ProcessLogRecord(
   assert(stop_replay_by_wal_filter);
 
   Status process_status;
+  /**
+   * 标识当前WriteBatch是不是真的包含用户的写操作
+   * 1 可能过滤后WriteBatch为空了
+   * 2 空WriteBatch不能触发刷表
+   */
   bool has_valid_writes = false;
+  // 为什么起名叫batch呢 因为wal里面的一个record本身就是包含了批次的语义 一个wal的record包含的操作数量可能是多个 比如记录了put了5个kv
   WriteBatch batch;
   std::unique_ptr<WriteBatch> new_batch;
   WriteBatch* batch_to_use = nullptr;
 
+  // 校验wal日志record的结构完整性
   if (record.size() < WriteBatchInternal::kHeader) {
     reporter->Corruption(record.size(),
                          Status::Corruption("log record too small"));
     assert(process_status.ok());
     return process_status;
   }
-
+  // 拿到WriteBatch协议 放在batch_to_use里面
   process_status = InitializeWriteBatchForLogRecord(
       record, reader, running_ts_sz, &batch, new_batch, batch_to_use,
       record_checksum);
@@ -1505,6 +1557,7 @@ Status DBImpl::ProcessLogRecord(
     return process_status;
   }
 
+  // wal回放遇到了序号不连续情况 要丢掉当前的wal 原则是宁愿丢掉wal也不能破坏LSM结构
   MaybeReviseStopReplayForCorruption(*last_seqno_observed, next_sequence,
                                      stop_replay_for_corruption);
   if (*stop_replay_for_corruption) {
@@ -1527,6 +1580,7 @@ Status DBImpl::ProcessLogRecord(
   }
 
   assert(process_status.ok());
+  // 把数据写回到内存
   process_status = InsertLogRecordToMemtable(batch_to_use, wal_number,
                                              next_sequence, &has_valid_writes);
   MaybeIgnoreError(&process_status);
@@ -1540,6 +1594,7 @@ Status DBImpl::ProcessLogRecord(
     return process_status;
   }
 
+  // 恢复阶段刷L0级别的sst
   process_status = MaybeWriteLevel0TableForRecovery(
       has_valid_writes, read_only, wal_number, job_id, next_sequence,
       version_edits, flushed);
@@ -1549,6 +1604,16 @@ Status DBImpl::ProcessLogRecord(
 
 // We create a new batch and initialize with a valid prot_info_ to store
 // the data checksum
+/**
+ * 把wal文件里面的内容读出来变成了fragment->剥去物理协议头->可能一个可能多个组成record->这个record就是一个WriteBatch逻辑协议
+ * batch和new_batch两者是互斥角色 不是并列对象 最终用哪个就是二选一
+ * 1 没更新过就用原始WriteBatch
+ * 2 更新过就用重建的WriteBatch
+ * @param record wal文件读到的record 剥去了物理协议头
+ * @param batch 就地解析wal容器 原来是空的
+ * @param new_batch 必要时重建出来的替代品
+ * @param batch_to_use 后续统一使用的那个WriteBatch 它只能是batch或者new_batch其中的一个
+ */
 Status DBImpl::InitializeWriteBatchForLogRecord(
     Slice record, const std::unique_ptr<log::Reader>& reader,
     const UnorderedMap<uint32_t, size_t>& running_ts_sz, WriteBatch* batch,
@@ -1556,7 +1621,7 @@ Status DBImpl::InitializeWriteBatchForLogRecord(
     uint64_t* record_checksum) {
   assert(batch);
   assert(record_checksum);
-
+  // wal里面解析出来的WriteBatch原始逻辑协议
   Status status = WriteBatchInternal::SetContents(batch, record);
   if (!status.ok()) {
     return status;
@@ -1571,7 +1636,7 @@ Status DBImpl::InitializeWriteBatchForLogRecord(
   if (!status.ok()) {
     return status;
   }
-
+  // write batch被重建了就说明有更新 就用重建出来的 没更新就用wal文件里面解析出来的
   bool batch_updated = new_batch != nullptr;
   batch_to_use = batch_updated ? new_batch.get() : batch;
   TEST_SYNC_POINT_CALLBACK(
@@ -1586,6 +1651,11 @@ Status DBImpl::InitializeWriteBatchForLogRecord(
   return status;
 }
 
+/**
+ * 校验保证序号连续
+ * 如果发现序号倒退 不连续
+ * @param stop_replay_for_corruption 出参 wal回放遇到了序号不连续情况 要停止wal回放
+ */
 void DBImpl::MaybeReviseStopReplayForCorruption(
     SequenceNumber sequence, SequenceNumber const* const next_sequence,
     bool* stop_replay_for_corruption) {
@@ -1603,6 +1673,14 @@ void DBImpl::MaybeReviseStopReplayForCorruption(
   }
 }
 
+/**
+ *
+ * @param batch_to_use
+ * @param wal_number
+ * @param next_sequence
+ * @param has_valid_writes 出参 当前batch是不是真的包含用户的写操作
+ * @return
+ */
 Status DBImpl::InsertLogRecordToMemtable(WriteBatch* batch_to_use,
                                          uint64_t wal_number,
                                          SequenceNumber* next_sequence,
@@ -1622,6 +1700,13 @@ Status DBImpl::InsertLogRecordToMemtable(WriteBatch* batch_to_use,
   return status;
 }
 
+/**
+* wal恢复阶段刷到L0级别的sst
+* 什么时候会刷sst
+* 1 memory table满的时候
+* 2 read only为false的时候
+* 3 恢复过程中内在压力过大
+*/
 Status DBImpl::MaybeWriteLevel0TableForRecovery(
     bool has_valid_writes, bool read_only, uint64_t wal_number, int job_id,
     SequenceNumber const* const next_sequence,

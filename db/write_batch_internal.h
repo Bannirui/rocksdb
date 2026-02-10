@@ -78,6 +78,13 @@ struct WriteBatch::ProtectionInfo {
 class WriteBatchInternal {
  public:
   // WriteBatch header has an 8-byte sequence number followed by a 4-byte count.
+  // 一个wal日志的record有下面这些字段
+  // sequence number是序号 类型是64位整数
+  // count是record记录里面的操作数量 类型是32位整数
+  // 一条record至少包含这两个数 12字节
+  // Sequence,Count,ByteSize,Physical Offset,Key(s) : value
+  // 1,       1,    27,      0,     PUT(0) : 0x68656C6C6F30 : 0x776F726C6430
+  // 因为wal可能写到一半宕机或者被截断 拿这12字节作为record结构完整性校验的标准
   static constexpr size_t kHeader = 12;
 
   // WriteBatch methods with column_family_id instead of ColumnFamilyHandle*
