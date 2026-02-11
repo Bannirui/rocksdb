@@ -38,11 +38,22 @@ class InternalKey;
 // data structures.
 // The highest bit of the value type needs to be reserved to SST tables
 // for them to do more flexible encoding.
+/**
+ * 经典协议压缩
+ * 通用的是协议是tag+cf_id+key+value
+ * default CF是最常用的 也就意味着cf_id默认值0会高频出现
+ * 如果每个cf_id都一板一眼的写到wal文件会浪费很多空间
+ * 因此对默认CF就特殊处理简化成tag+key+value
+ * 为什么会有这么的协议类型呢 从上层应用视角出发数据只有增删改查等少数的几个操作
+ * 但是wal不单单是记录数据本身 更重要的LSM的状态转换
+ */
 enum ValueType : unsigned char {
+  // 默认CF
   kTypeDeletion = 0x0,
   kTypeValue = 0x1,
   kTypeMerge = 0x2,
   kTypeLogData = 0x3,               // WAL only.
+  // 不是默认CF
   kTypeColumnFamilyDeletion = 0x4,  // WAL only.
   kTypeColumnFamilyValue = 0x5,     // WAL only.
   kTypeColumnFamilyMerge = 0x6,     // WAL only.

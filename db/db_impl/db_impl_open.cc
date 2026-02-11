@@ -1675,7 +1675,7 @@ void DBImpl::MaybeReviseStopReplayForCorruption(
 
 /**
  *
- * @param batch_to_use
+ * @param batch_to_use WriteBatch协议
  * @param wal_number
  * @param next_sequence
  * @param has_valid_writes 出参 当前batch是不是真的包含用户的写操作
