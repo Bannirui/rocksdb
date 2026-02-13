@@ -810,11 +810,18 @@ void WriteBatchInternal::SetAsLatestPersistentState(WriteBatch* b) {
   b->is_latest_persistent_state_ = true;
 }
 
+// 看看现在WriteBatch协议里面有几个put record
 uint32_t WriteBatchInternal::Count(const WriteBatch* b) {
+  // 跳过协议头前8个字节 解码出32位固定长度整数
   return DecodeFixed32(b->rep_.data() + 8);
 }
 
+/**
+ * 在WriteBatch协议头的count上编码
+ * @param n WriteBatch里面有几个put record
+ */
 void WriteBatchInternal::SetCount(WriteBatch* b, uint32_t n) {
+  // 协议头前8个字节是seq序号 紧跟着4字节是32位固定长度整数
   EncodeFixed32(&b->rep_[8], n);
 }
 
@@ -886,6 +893,11 @@ Status CheckColumnFamilyTimestampSize(ColumnFamilyHandle* column_family,
 }
 }  // anonymous namespace
 
+/**
+ * 键值对编码到WriteBatch协议
+ * 1 协议头里面的count字段
+ * 2 TLV协议 tag+cf id+key长度+key+value长度+value
+ */
 Status WriteBatchInternal::Put(WriteBatch* b, uint32_t column_family_id,
                                const Slice& key, const Slice& value) {
   if (key.size() > size_t{std::numeric_limits<uint32_t>::max()}) {
@@ -896,14 +908,20 @@ Status WriteBatchInternal::Put(WriteBatch* b, uint32_t column_family_id,
   }
 
   LocalSavePoint save(b);
+  // 协议头里面count+1编码进去
   WriteBatchInternal::SetCount(b, WriteBatchInternal::Count(b) + 1);
   if (column_family_id == 0) {
+    // tag标识
+    // 默认cf约定在编码里面不需要cf id
     b->rep_.push_back(static_cast<char>(kTypeValue));
   } else {
     b->rep_.push_back(static_cast<char>(kTypeColumnFamilyValue));
+    // cf id
     PutVarint32(&b->rep_, column_family_id);
   }
+  // key的长度+key
   PutLengthPrefixedSlice(&b->rep_, key);
+  // value的长度+value
   PutLengthPrefixedSlice(&b->rep_, value);
   b->content_flags_.store(
       b->content_flags_.load(std::memory_order_relaxed) | ContentFlags::HAS_PUT,
@@ -964,6 +982,11 @@ Status WriteBatchInternal::TimedPut(WriteBatch* b, uint32_t column_family_id,
   return save.commit();
 }
 
+/**
+ * 把键值对编码到WriteBatch协议
+ * @param key 键
+ * @param value 值
+ */
 Status WriteBatch::Put(ColumnFamilyHandle* column_family, const Slice& key,
                        const Slice& value) {
   size_t ts_sz = 0;
@@ -1058,6 +1081,7 @@ Status WriteBatchInternal::CheckSlicePartsLength(const SliceParts& key,
   return Status::OK();
 }
 
+// key value编码到WriteBatch协议
 Status WriteBatchInternal::Put(WriteBatch* b, uint32_t column_family_id,
                                const SliceParts& key, const SliceParts& value) {
   Status s = CheckSlicePartsLength(key, value);
@@ -1068,12 +1092,17 @@ Status WriteBatchInternal::Put(WriteBatch* b, uint32_t column_family_id,
   LocalSavePoint save(b);
   WriteBatchInternal::SetCount(b, WriteBatchInternal::Count(b) + 1);
   if (column_family_id == 0) {
+    // tag
     b->rep_.push_back(static_cast<char>(kTypeValue));
   } else {
+    // tag
     b->rep_.push_back(static_cast<char>(kTypeColumnFamilyValue));
+    // cf id的变长整数
     PutVarint32(&b->rep_, column_family_id);
   }
+  // key的长度+key
   PutLengthPrefixedSliceParts(&b->rep_, key);
+  // value的长度+value
   PutLengthPrefixedSliceParts(&b->rep_, value);
   b->content_flags_.store(
       b->content_flags_.load(std::memory_order_relaxed) | ContentFlags::HAS_PUT,
