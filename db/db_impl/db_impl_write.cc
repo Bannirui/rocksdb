@@ -367,6 +367,22 @@ Status DBImpl::IngestWBWIAsMemtable(
   return s;
 }
 
+/**
+ *
+ * @param write_options
+ * @param my_batch kv键值对编码好的WriteBatch
+ * @param callback
+ * @param user_write_cb
+ * @param wal_used 出参 这个写入用了哪个WAL日志
+ * @param log_ref
+ * @param disable_memtable
+ * @param seq_used
+ * @param batch_cnt 出参 WriteBacth里面有多少条put record
+ * @param pre_release_callback
+ * @param post_memtable_callback
+ * @param wbwi
+ * @return
+ */
 Status DBImpl::WriteImpl(const WriteOptions& write_options,
                          WriteBatch* my_batch, WriteCallback* callback,
                          UserWriteCallback* user_write_cb, uint64_t* wal_used,
@@ -543,6 +559,7 @@ Status DBImpl::WriteImpl(const WriteOptions& write_options,
   }
 
   PERF_TIMER_GUARD(write_pre_and_post_process_time);
+  // 每个写线程创建一个串行执行器WriteThread的结点 初始化的state是INIT
   WriteThread::Writer w(write_options, my_batch, callback, user_write_cb,
                         log_ref, disable_memtable, batch_cnt,
                         pre_release_callback, post_memtable_callback,
@@ -668,6 +685,7 @@ Status DBImpl::WriteImpl(const WriteOptions& write_options,
     // more than once to a particular key.
     bool parallel = immutable_db_options_.allow_concurrent_memtable_write &&
                     write_group.size > 1;
+    // 统计WriteBatch里面有多少个put record
     size_t total_count = 0;
     size_t valid_batches = 0;
     size_t total_byte_size = 0;
@@ -677,6 +695,7 @@ Status DBImpl::WriteImpl(const WriteOptions& write_options,
       if (writer->CheckCallback(this)) {
         valid_batches += writer->batch_cnt;
         if (writer->ShouldWriteToMemtable()) {
+          // 统计WriteBatch里面的put record
           total_count += WriteBatchInternal::Count(writer->batch);
           total_byte_size = WriteBatchInternal::AppendedByteSize(
               total_byte_size, WriteBatchInternal::ByteSize(writer->batch));

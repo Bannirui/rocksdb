@@ -137,6 +137,15 @@ class WriteThread {
     WriteCallback* callback;
     UserWriteCallback* user_write_cb;
     bool made_waitable;          // records lazy construction of mutex and cv
+    /**
+     * 每个写线程都会创建一个Write 最重要的就是state
+     * state是负责状态流转
+     * 成为leader的结点收集WriteBatch形成顺序的group统一进行WAL的写入
+     * 如果每个线程都单独写WAL 会导致
+     * 1 WAL锁竞争
+     * 2 fsync爆炸
+     * 3 sequence分配冲突
+     */
     std::atomic<uint8_t> state;  // write under StateMutex() or pre-link
     WriteGroup* write_group;
     SequenceNumber sequence;  // the sequence number to use for the first key
@@ -195,7 +204,7 @@ class WriteThread {
           callback(_callback),
           user_write_cb(_user_write_cb),
           made_waitable(false),
-          state(STATE_INIT),
+          state(STATE_INIT), // state初始化成INIT状态
           write_group(nullptr),
           sequence(kMaxSequenceNumber),
           link_older(nullptr),
@@ -430,6 +439,7 @@ class WriteThread {
 
   // Points to the newest pending writer. Only leader can remove
   // elements, adding can be done lock-free by anybody.
+  // 写线程链表 线程创建writer结点后无锁入队就会放到这个单链表
   std::atomic<Writer*> newest_writer_;
 
   // Points to the newest pending memtable writer. Used only when pipelined
@@ -443,6 +453,7 @@ class WriteThread {
   // A dummy writer to indicate a write stall condition. This will be inserted
   // at the tail of the writer queue by the leader, so newer writers can just
   // check for this and bail
+  // 哨兵结点 用来标识阻断 不让全局的写继续
   Writer write_stall_dummy_;
 
   // Mutex and condvar for writers to block on a write stall. During a write

@@ -223,15 +223,23 @@ void WriteThread::SetState(Writer* w, uint8_t new_state) {
   }
 }
 
+/**
+ * 无锁(mutex)入队
+ * @param w
+ * @param newest_writer
+ * @return
+ */
 bool WriteThread::LinkOne(Writer* w, std::atomic<Writer*>* newest_writer) {
   assert(newest_writer != nullptr);
   assert(w->state == STATE_INIT);
+  // 原子读写 读到当前链表头结点
   Writer* writers = newest_writer->load(std::memory_order_relaxed);
   while (true) {
     assert(writers != w);
     // If write stall in effect, and w->no_slowdown is not true,
     // block here until stall is cleared. If its true, then return
     // immediately
+    // 链表指向了阻断标识
     if (writers == &write_stall_dummy_) {
       if (w->no_slowdown) {
         w->status = Status::Incomplete("Write stall");
@@ -243,8 +251,10 @@ bool WriteThread::LinkOne(Writer* w, std::atomic<Writer*>* newest_writer) {
       {
         MutexLock lock(&stall_mu_);
         writers = newest_writer->load(std::memory_order_relaxed);
+        // 锁内检查
         if (writers == &write_stall_dummy_) {
           TEST_SYNC_POINT_CALLBACK("WriteThread::WriteStall::Wait", w);
+          // 还是阻断标识 让当前写线程阻塞在这 暂停写 等待阻塞解除
           stall_cv_.Wait();
           // Load newest_writers_ again since it may have changed
           writers = newest_writer->load(std::memory_order_relaxed);
