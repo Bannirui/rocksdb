@@ -530,6 +530,7 @@ Status ReadRecordFromWriteBatch(Slice* input, char* tag,
 /**
  * 1个WriteBatch里面可能会有多个put record
  * 解析里面每个put record
+ * @param handler ProtectionInfoUpdater对象
  */
 Status WriteBatch::Iterate(Handler* handler) const {
   if (rep_.size() < WriteBatchInternal::kHeader) {
@@ -547,6 +548,7 @@ Status WriteBatch::Iterate(Handler* handler) const {
  * 第2个 tag+cf id+key长度+key+value长度+value
  * 所以在处理的时候需要while
  * @param wb WriteBatch逻辑协议=协议头+协议体[begin...end)
+ * @param handler ProtectionInfoUpdater对象
  */
 Status WriteBatchInternal::Iterate(const WriteBatch* wb,
                                    WriteBatch::Handler* handler, size_t begin,
@@ -602,7 +604,7 @@ Status WriteBatchInternal::Iterate(const WriteBatch* wb,
       last_was_try_again = true;
       s = Status::OK();
     }
-    // 2 上面已经解析出来了put record 派发业务处理
+    // 2 上面已经解析出来了put record 派发业务处理 真正的处理逻辑在ProtectionInfoUpdater里面
     switch (tag) {
       case kTypeColumnFamilyValue:
       case kTypeValue:
@@ -3536,6 +3538,7 @@ Status WriteBatchInternal::UpdateProtectionInfo(WriteBatch* wb,
   } else if (bytes_per_key == 8) {
     if (wb->prot_info_ == nullptr) {
       wb->prot_info_.reset(new WriteBatch::ProtectionInfo());
+      // 真正处理put record的就是这个对象
       ProtectionInfoUpdater prot_info_updater(wb->prot_info_.get());
       Status s = wb->Iterate(&prot_info_updater);
       if (s.ok() && checksum != nullptr) {
