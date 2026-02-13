@@ -412,6 +412,7 @@ IOStatus Directories::SetDirectories(FileSystem* fs, const std::string& dbname,
 /**
  * 1 从manifest文件中重建内存中的VersionSet
  * 2 从wal文件中那些还没flush到sst文件中的记录恢复内存数据库
+ * 3 每一个wal文件回放完后看看有没有刷盘任务要执行再把内存刷到SST Level0
  */
 Status DBImpl::Recover(
     const std::vector<ColumnFamilyDescriptor>& column_families, bool read_only,
@@ -1137,7 +1138,7 @@ void DBOpenLogRecordReadReporter::OldLogRecord(size_t bytes) {
 
 // REQUIRES: wal_numbers are sorted in ascending order
 /**
- *
+ * 要回放的wal文件按编号顺序逐个回放
  * @param wal_numbers wal文件编号升序
  * @param next_sequence 出参 下一个合法可分配的序号 wal恢复回放期间不断推进 保证后续写入不会冲突
  */
@@ -1215,6 +1216,7 @@ void DBImpl::SetupLogFilesRecovery(
 }
 
 /**
+ * 把要回放的WAL文件按编号生序逐个处理
  * @param min_wal_number 入参
  * @param next_sequence 出参 下一个合法可分配的序号 wal恢复回放期间不断推进 保证后续写入不会冲突
  * @param version_edits 用来收集CF的VersionEdit的过程差量 最终定格成CF的终量
@@ -1266,7 +1268,11 @@ Status DBImpl::ProcessLogFiles(
 }
 
 /**
- *
+ * 处理要回放的某一个WAL文件
+ * 1 先把WAL文件内容解析成WAL record
+ * 2 把wal record解析成一个WriteBatch 也就是多个put record
+ * 3 把put record作用到内存
+ * 4 处理完这个文件后 看看有没有刷盘任务要执行
  * @param wal_number wal文件的序号
  * @param min_wal_number 入参 wal的编号下限
  * @param is_retry
@@ -1523,6 +1529,7 @@ Status DBImpl::ProcessLogRecord(
    * 标识当前WriteBatch是不是真的包含用户的写操作
    * 1 可能过滤后WriteBatch为空了
    * 2 空WriteBatch不能触发刷表
+   * 只有真的有WAL的数据进了内存 才可能必要看一下要把内存往SST刷
    */
   bool has_valid_writes = false;
   // 为什么起名叫batch呢 因为wal里面的一个record本身就是包含了批次的语义 一个wal的record包含的操作数量可能是多个 比如记录了put了5个kv
@@ -1594,7 +1601,7 @@ Status DBImpl::ProcessLogRecord(
     return process_status;
   }
 
-  // 恢复阶段刷L0级别的sst
+  // 已经把1个WAL文件回放到了内存 这批数据可能会导致内存被占满而触发产生了一个刷盘任务 因此这个时机看一下有没有刷盘任务要执行
   process_status = MaybeWriteLevel0TableForRecovery(
       has_valid_writes, read_only, wal_number, job_id, next_sequence,
       version_edits, flushed);
@@ -1674,7 +1681,7 @@ void DBImpl::MaybeReviseStopReplayForCorruption(
 }
 
 /**
- *
+ * 一个WriteBatch包含多个put record 都回放到内存上 都回放后看看有没有刷盘任务要执行
  * @param batch_to_use WriteBatch协议
  * @param wal_number
  * @param next_sequence
@@ -1701,12 +1708,16 @@ Status DBImpl::InsertLogRecordToMemtable(WriteBatch* batch_to_use,
 }
 
 /**
-* wal恢复阶段刷到L0级别的sst
-* 什么时候会刷sst
-* 1 memory table满的时候
-* 2 read only为false的时候
-* 3 恢复过程中内在压力过大
-*/
+ * 内存数据往SST0刷 什么时候需要把内存的时候持久化
+ * 设计是队列解耦 队列里面有任务就可以进行持久化 那么什么时候会有持久化任务
+ * 1 memory table满的时候
+ * 2 WAL大小超限
+ * 3 recovery强制flush
+ * 在WAL重建内存期间会顺序处理每个wal文件 每回放完一个文件就过来看一下有没有刷盘任务
+ * @param has_valid_writes WAL回放了数据进了内存
+ * @param read_only 只读模式下允许生成新的SST
+ * @param wal_number WAL回放的是批量wal编号 在一个for循环里面顺序处理wal 当前处理的wal编号
+ */
 Status DBImpl::MaybeWriteLevel0TableForRecovery(
     bool has_valid_writes, bool read_only, uint64_t wal_number, int job_id,
     SequenceNumber const* const next_sequence,
@@ -1725,6 +1736,7 @@ Status DBImpl::MaybeWriteLevel0TableForRecovery(
       cfd->UnrefAndTryDelete();
       // If this asserts, it means that InsertInto failed in
       // filtering updates to already-flushed column families
+      // WAL恢复的内存 内存往SST刷 保证不会将未来的WAL刷到SST
       assert(cfd->GetLogNumber() <= wal_number);
       (void)wal_number;
       auto iter = version_edits->find(cfd->GetID());

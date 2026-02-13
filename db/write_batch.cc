@@ -3312,7 +3312,8 @@ Status WriteBatchInternal::InsertInto(
 }
 
 /**
- *
+ * 把WriteBatch里面多个put record回放到内存
+ * 处理完后看看有没有刷盘任务要执行
  * @param batch WriteBatch协议
  * @param memtables
  * @param flush_scheduler

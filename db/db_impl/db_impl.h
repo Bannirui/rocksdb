@@ -2980,6 +2980,12 @@ class DBImpl : public DB {
   // to the WAL its size need not to be included in this.
   uint64_t last_batch_group_size_ = 0;
 
+  /**
+   * 调度队列 谁会往里面放cf
+   * 1 memory table满
+   * 2 WAL size超限
+   * 3 recovery强制flush
+   */
   FlushScheduler flush_scheduler_;
 
   TrimHistoryScheduler trim_history_scheduler_;
