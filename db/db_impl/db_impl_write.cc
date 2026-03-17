@@ -559,13 +559,15 @@ Status DBImpl::WriteImpl(const WriteOptions& write_options,
   }
 
   PERF_TIMER_GUARD(write_pre_and_post_process_time);
-  // 每个写线程创建一个串行执行器WriteThread的结点 初始化的state是INIT
+  // 看看RocksDB是怎么并发控制的
+  // 每个写线程创建一个Write 每个Write代表着一个写请求 初始化的state是INIT
+  // WriteThread是串行执行器 负责管理这些写请求
   WriteThread::Writer w(write_options, my_batch, callback, user_write_cb,
                         log_ref, disable_memtable, batch_cnt,
                         pre_release_callback, post_memtable_callback,
                         /*_ingest_wbwi=*/wbwi != nullptr);
   StopWatch write_sw(immutable_db_options_.clock, stats_, DB_WRITE);
-
+  // 线程入队
   write_thread_.JoinBatchGroup(&w);
   if (w.state == WriteThread::STATE_PARALLEL_MEMTABLE_CALLER) {
     write_thread_.SetMemWritersEachStride(&w);
@@ -624,6 +626,7 @@ Status DBImpl::WriteImpl(const WriteOptions& write_options,
     return w.FinalStatus();
   }
   // else we are the leader of the write batch group
+  // 当前线程是leader
   assert(w.state == WriteThread::STATE_GROUP_LEADER);
   Status status;
   // Once reaches this point, the current writer "w" will try to do its write
@@ -633,6 +636,7 @@ Status DBImpl::WriteImpl(const WriteOptions& write_options,
   WriteContext write_context;
   // FIXME: also check disableWAL like others?
   WalContext wal_context(write_options.sync);
+  // leader有权组建write group 把要一起提交写的线程请求收集起来
   WriteThread::WriteGroup write_group;
   bool in_parallel_group = false;
   uint64_t last_sequence = kMaxSequenceNumber;
@@ -662,6 +666,7 @@ Status DBImpl::WriteImpl(const WriteOptions& write_options,
   // into memtables
 
   TEST_SYNC_POINT("DBImpl::WriteImpl:BeforeLeaderEnters");
+  // Leader批处理提交的WriteBatch协议多大
   last_batch_group_size_ =
       write_thread_.EnterAsBatchGroupLeader(&w, &write_group);
   if (wbwi) {

@@ -225,13 +225,14 @@ void WriteThread::SetState(Writer* w, uint8_t new_state) {
 
 /**
  * 无锁(mutex)入队
- * @param w
- * @param newest_writer
- * @return
+ * 用的是头插 不用尾插的原因是如果用尾插就每次要遍历链表到尾结点
+ * @param w 要入队的写线程
+ * @param newest_writer 当前的队列链表头
+ * @return 返回值标识当前的线程w有没有晋升成WriterThead管理器的leader
  */
 bool WriteThread::LinkOne(Writer* w, std::atomic<Writer*>* newest_writer) {
   assert(newest_writer != nullptr);
-  assert(w->state == STATE_INIT);
+  assert(w->state == STATE_INIT); // 入队的线程状态必定是刚初始化好的
   // 原子读写 读到当前链表头结点
   Writer* writers = newest_writer->load(std::memory_order_relaxed);
   while (true) {
@@ -264,6 +265,11 @@ bool WriteThread::LinkOne(Writer* w, std::atomic<Writer*>* newest_writer) {
     }
     w->link_older = writers;
     if (newest_writer->compare_exchange_weak(writers, w)) {
+      // 这行代码什么意思 为什么要这么判断
+      // WriterThread会让链表尾成为leader
+      // 1 在当前线程入队之前 队列是空的 那么当前线程入队后自己就是队尾 那么当前线程就可以成为leader
+      // 2 在当前线程入队之前 队列不是空的 那么也就说队尾已经有了线程 也就是说已经有了leader 那么当前线程就不能当leader了
+      // 所以判断writers==nullptr本质就是看看当前入队的现成有没有资格成为leader
       return (writers == nullptr);
     }
   }
@@ -408,15 +414,23 @@ void WriteThread::WaitForStallEndedCount(uint64_t stall_count) {
 }
 
 static WriteThread::AdaptationContext jbg_ctx("JoinBatchGroup");
+/**
+ * 线程入队并判定能不能成为leader
+ * 1 如果晋升为leader就重置状态
+ * 2 如果没成为leader就等着leader分配状态 阻塞着等leader会过来修改线程的结点状态
+ * @param w 线程
+ */
 void WriteThread::JoinBatchGroup(Writer* w) {
   TEST_SYNC_POINT_CALLBACK("WriteThread::JoinBatchGroup:Start", w);
   assert(w->batch != nullptr);
 
+  // 线程入队
   bool linked_as_leader = LinkOne(w, &newest_writer_);
 
   w->CheckWriteEnqueuedCallback();
 
   if (linked_as_leader) {
+    // 线程能晋升成leader角色后重置链表结点状态
     SetState(w, STATE_GROUP_LEADER);
   }
 
@@ -447,6 +461,13 @@ void WriteThread::JoinBatchGroup(Writer* w) {
   }
 }
 
+/**
+ * 只有leader线程才会执行到这 Leader线程负责把整个线程队列中可以跟自己批处理的线程找出来 把不能跟自己批处理的也找出来 按照时序分两个逻辑组
+ * 可以批处理的线程对应的连续内存空间交给Group
+ * @param leader 在线程队列中的leader线程
+ * @param write_group leader准备组建的group
+ * @return 批处理的WriteBatch协议多大
+ */
 size_t WriteThread::EnterAsBatchGroupLeader(Writer* leader,
                                             WriteGroup* write_group) {
   assert(leader->link_older == nullptr);
@@ -465,6 +486,10 @@ size_t WriteThread::EnterAsBatchGroupLeader(Writer* leader,
   }
 
   leader->write_group = write_group;
+  // leader需要做的事情是把自己后来的写线程请求都归类到一起进行批处理
+  // 怎么才算把Write线程加到了group
+  // 因为线程链表中的写线程是天然时序的 所以只要在group里面维护两个边界指针 在线程链表里面划定区间的一头一尾就算把这一段区间的线程加到了group里面
+  // 先把Leader放到Group 所以这个时候区间指针都是指向的Leader 后面再放其他的线程进来 就移动last_writer线程就行
   write_group->leader = leader;
   write_group->last_writer = leader;
   write_group->size = 1;
@@ -504,17 +529,22 @@ size_t WriteThread::EnterAsBatchGroupLeader(Writer* leader,
   // @leader, @n2, @newest_writer, n4     n1, n3
   // @leader, @n2, @newest_writer, n1, n3, n4
 
+  // 下面的代码就是Leader开始考察整个线程队列里面的每一个线程看看有没有资格和自己一起进行批处理
+  // 1 能批处理的就加到Group里面 并且把它们也单独用个临时队列维护 [w...we]
   // Tricky. Iteration start (leader) is exclusive and finish
   // (newest_writer) is inclusive. Iteration goes from old to new.
   Writer* w = leader;
   // write_group end
   Writer* we = leader;
+  // 2 不能批处理的线程摘出来单放 放在哪儿 所以要给它们准备个临时队列 [rb...re]
   // declare r_list
-  Writer* rb = nullptr;
-  Writer* re = nullptr;
+  Writer* rb = nullptr; // rejected begin
+  Writer* re = nullptr; // rejected end
 
+  // 在写线程链表中 比当前leader更早的请求已经被处理完了 所以当前的leader职责是找到所有比自己晚的请求合并到一起处理
   while (w != newest_writer) {
     assert(w->link_newer);
+    // 后进来的写线程
     w = w->link_newer;
 
     if ((w->sync && !leader->sync) ||
@@ -538,11 +568,14 @@ size_t WriteThread::EnterAsBatchGroupLeader(Writer* leader,
         (leader->ingest_wbwi || w->ingest_wbwi)
         // ingesting WBWI needs to be its own group
     ) {
+      // 不能加入到Group的线程丢到临时队列里面 把它们从现在的队列摘出来的原因是Group用的边界指针维护 所以必须要保证链表里面的线程结点在内存上连续的
+      // 先从链表上摘除
       // remove from list
       w->link_older->link_newer = w->link_newer;
       if (w->link_newer != nullptr) {
         w->link_newer->link_older = w->link_older;
       }
+      // 摘下来后保持相对位置放到临时链表里面
       // insert into r_list
       if (re == nullptr) {
         rb = re = w;
@@ -557,11 +590,13 @@ size_t WriteThread::EnterAsBatchGroupLeader(Writer* leader,
       we = w;
       w->write_group = write_group;
       size += WriteBatchInternal::ByteSize(w->batch);
+      // 可以放到一个Group的线程 加到这个Group里面
       write_group->last_writer = w;
       write_group->size++;
     }
   }
   // append r_list after write_group end
+  // 哪些需要交给Group将来由Leader一次性操作的已经准备好 上面挑选线程的时候分出来不能在一个Group处理的需要再按照时序挂到Group队列后面 由下一个Leader继续处理
   if (rb != nullptr) {
     rb->link_older = we;
     re->link_newer = nullptr;

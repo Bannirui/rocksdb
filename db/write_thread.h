@@ -83,8 +83,11 @@ class WriteThread {
 
   struct Writer;
 
+  // leader把线程链表归于批处理的整合到一起 通过WriteGroup管理 Group用边界指针管理哪些线程是一批的
   struct WriteGroup {
+    // 边界指针 [leader...last_writer]
     Writer* leader = nullptr;
+    // 边界指针 [leader...last_writer]
     Writer* last_writer = nullptr;
     SequenceNumber last_sequence;
     // before running goes to zero, status needs leader->StateMutex()
@@ -123,6 +126,7 @@ class WriteThread {
   // Information kept for every waiting writer.
   struct Writer {
     WriteBatch* batch;
+    // 写请求对WAL fsync的要求 有的需要保证强一致性所以sync=true 有的不需要强一致性也就是弱一致性就行所以sync=fa
     bool sync;
     bool no_slowdown;
     bool disable_wal;
@@ -154,7 +158,9 @@ class WriteThread {
 
     aligned_storage<std::mutex>::type state_mutex_bytes;
     aligned_storage<std::condition_variable>::type state_cv_bytes;
+    // 指向线程链表的尾 就是next
     Writer* link_older;  // read/write only before linking, or as leader
+    // 指向线程链表的头 就是prev
     Writer* link_newer;  // lazy, read/write only before linking, or as leader
 
     bool ingest_wbwi;
@@ -439,7 +445,7 @@ class WriteThread {
 
   // Points to the newest pending writer. Only leader can remove
   // elements, adding can be done lock-free by anybody.
-  // 写线程链表 线程创建writer结点后无锁入队就会放到这个单链表
+  // 写线程链表 线程创建writer结点后无锁入队就会放到这个单链表 在WriteThread中维护链表的头结点
   std::atomic<Writer*> newest_writer_;
 
   // Points to the newest pending memtable writer. Used only when pipelined
