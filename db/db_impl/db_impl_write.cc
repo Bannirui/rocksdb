@@ -788,6 +788,7 @@ Status DBImpl::WriteImpl(const WriteOptions& write_options,
         assert(wal_context.wal_file_number_size);
         wal_context.prev_size = wal_context.writer->file()->GetFileSize();
         PERF_TIMER_GUARD(write_wal_time);
+        // 把WriteGroup里面要批量提交的数据一次性写到WAL
         io_s = WriteGroupToWAL(write_group, wal_context.writer, wal_used,
                                wal_context.need_wal_sync,
                                wal_context.need_wal_dir_sync, last_sequence + 1,
@@ -1629,7 +1630,8 @@ Status DBImpl::PreprocessWrite(const WriteOptions& write_options,
 
 /**
  * 线程要提交的数据复制合并
- * @param write_group 在Group里面维护了线程链表 用[leader...last_writer]划定了界限哪些要一次性提交
+ * @param write_group 在Group里面维护了线程链表
+ * 用[leader...last_writer]划定了界限哪些要一次性提交
  * @param merged_batch 所有线程要提交的数据都会拷贝到merged_batch上
  */
 Status DBImpl::MergeBatch(const WriteThread::WriteGroup& write_group,
@@ -1690,7 +1692,7 @@ IOStatus DBImpl::WriteToWAL(const WriteBatch& merged_batch,
                             WalFileNumberSize& wal_file_number_size,
                             SequenceNumber sequence) {
   assert(log_size != nullptr);
-
+  // 线程要提交的数据 二进制格式
   Slice log_entry = WriteBatchInternal::Contents(&merged_batch);
   TEST_SYNC_POINT_CALLBACK("DBImpl::WriteToWAL:log_entry", &log_entry);
   auto s = merged_batch.VerifyChecksum();
@@ -1714,6 +1716,7 @@ IOStatus DBImpl::WriteToWAL(const WriteBatch& merged_batch,
   if (!io_s.ok()) {
     return io_s;
   }
+  // 把二进制的WriteBatch协议写到WAL中
   io_s = log_writer->AddRecord(write_options, log_entry, sequence);
 
   if (UNLIKELY(needs_locking)) {
@@ -1731,7 +1734,7 @@ IOStatus DBImpl::WriteToWAL(const WriteBatch& merged_batch,
 }
 
 /**
- * 
+ * 先从WriteGroup里面把要提交的数据都拷贝出来 然后一起写到WAL
  * @param write_group 要批量提交的写请求 维护了边界指针可以知道哪些提交要一起写到WAL的
  * @param log_writer 负责写WAL日志
  * @param wal_used 出参 是不是真的写了WAL
@@ -1775,6 +1778,7 @@ IOStatus DBImpl::WriteGroupToWAL(const WriteThread::WriteGroup& write_group,
   WriteOptions write_options;
   write_options.rate_limiter_priority =
       write_group.leader->rate_limiter_priority;
+  // 写到WAL
   io_s = WriteToWAL(*merged_batch, write_options, log_writer, wal_used,
                     &log_size, wal_file_number_size, sequence);
   if (to_be_cached_state) {

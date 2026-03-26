@@ -86,6 +86,9 @@ bool Writer::PublishIfClosed() {
   }
 }
 
+/**
+ * @param slice 线程提交的数据 二进制格式
+ */
 IOStatus Writer::AddRecord(const WriteOptions& write_options,
                            const Slice& slice, const SequenceNumber& seqno) {
   IOStatus s = MaybeHandleSeenFileWriterError();
