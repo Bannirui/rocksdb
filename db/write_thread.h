@@ -93,8 +93,10 @@ class WriteThread {
     // before running goes to zero, status needs leader->StateMutex()
     Status status;
     std::atomic<size_t> running;
+    // 一个Group里面整合了多少个写线程
     size_t size = 0;
 
+    // 迭代区间[writer...last_writer]
     struct Iterator {
       Writer* writer;
       Writer* last_writer;
@@ -119,6 +121,7 @@ class WriteThread {
       }
     };
 
+    // begin和end函数是为了for循环展开
     Iterator begin() const { return Iterator(leader, last_writer); }
     Iterator end() const { return Iterator(nullptr, nullptr); }
   };

@@ -381,7 +381,6 @@ Status DBImpl::IngestWBWIAsMemtable(
  * @param pre_release_callback
  * @param post_memtable_callback
  * @param wbwi
- * @return
  */
 Status DBImpl::WriteImpl(const WriteOptions& write_options,
                          WriteBatch* my_batch, WriteCallback* callback,
@@ -695,6 +694,7 @@ Status DBImpl::WriteImpl(const WriteOptions& write_options,
     size_t valid_batches = 0;
     size_t total_byte_size = 0;
     size_t pre_release_callback_cnt = 0;
+    // 统计批处理的线程
     for (auto* writer : write_group) {
       assert(writer);
       if (writer->CheckCallback(this)) {
@@ -1627,6 +1627,11 @@ Status DBImpl::PreprocessWrite(const WriteOptions& write_options,
   return status;
 }
 
+/**
+ * 线程要提交的数据复制合并
+ * @param write_group 在Group里面维护了线程链表 用[leader...last_writer]划定了界限哪些要一次性提交
+ * @param merged_batch 所有线程要提交的数据都会拷贝到merged_batch上
+ */
 Status DBImpl::MergeBatch(const WriteThread::WriteGroup& write_group,
                           WriteBatch* tmp_batch, WriteBatch** merged_batch,
                           size_t* write_with_wal,
@@ -1639,6 +1644,7 @@ Status DBImpl::MergeBatch(const WriteThread::WriteGroup& write_group,
   assert(!leader->disable_wal);  // Same holds for all in the batch group
   if (write_group.size == 1 && !leader->CallbackFailed() &&
       leader->batch->GetWalTerminationPoint().is_cleared()) {
+    // 刚好Group里面只有一个线程
     // we simply write the first WriteBatch to WAL if the group only
     // contains one batch, that batch should be written to the WAL,
     // and the batch is not wanting to be truncated
@@ -1648,12 +1654,15 @@ Status DBImpl::MergeBatch(const WriteThread::WriteGroup& write_group,
     }
     *write_with_wal = 1;
   } else {
+    // Group里面有多个线程 要把这些线程要提交的数据都拿出来聚在一起
     // WAL needs all of the batches flattened into a single batch.
     // We could avoid copying here with an iov-like AddRecord
     // interface
     *merged_batch = tmp_batch;
+    // WriteGroup类写了Iterator的begin和end函数 所以可以for循环
     for (auto writer : write_group) {
       if (!writer->CallbackFailed()) {
+        // 把线程要提交的数据拷贝一份到merged_batch上
         Status s = WriteBatchInternal::Append(*merged_batch, writer->batch,
                                               /*WAL_only*/ true);
         if (!s.ok()) {
@@ -1721,6 +1730,16 @@ IOStatus DBImpl::WriteToWAL(const WriteBatch& merged_batch,
   return io_s;
 }
 
+/**
+ * 
+ * @param write_group 要批量提交的写请求 维护了边界指针可以知道哪些提交要一起写到WAL的
+ * @param log_writer 负责写WAL日志
+ * @param wal_used 出参 是不是真的写了WAL
+ * @param need_wal_sync 入参 是不是需要WAL来fsync
+ * @param need_wal_dir_sync 
+ * @param sequence 
+ * @param wal_file_number_size 
+ */
 IOStatus DBImpl::WriteGroupToWAL(const WriteThread::WriteGroup& write_group,
                                  log::Writer* log_writer, uint64_t* wal_used,
                                  bool need_wal_sync, bool need_wal_dir_sync,

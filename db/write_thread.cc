@@ -462,7 +462,9 @@ void WriteThread::JoinBatchGroup(Writer* w) {
 }
 
 /**
- * 只有leader线程才会执行到这 Leader线程负责把整个线程队列中可以跟自己批处理的线程找出来 把不能跟自己批处理的也找出来 按照时序分两个逻辑组
+ * 只有leader线程才会执行到这
+ * Leader线程负责把整个线程队列中可以跟自己批处理的线程找出来
+ * 把不能跟自己批处理的也找出来 按照时序分两个逻辑组
  * 可以批处理的线程对应的连续内存空间交给Group
  * @param leader 在线程队列中的leader线程
  * @param write_group leader准备组建的group
