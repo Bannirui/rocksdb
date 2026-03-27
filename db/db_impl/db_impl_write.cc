@@ -368,7 +368,9 @@ Status DBImpl::IngestWBWIAsMemtable(
 }
 
 /**
- *
+ * 1 Leader统一汇总要提交数据的线程请求
+ * 2 一次性写到WAL
+ * 3 写到内存表
  * @param write_options
  * @param my_batch kv键值对编码好的WriteBatch
  * @param callback

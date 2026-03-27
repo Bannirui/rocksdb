@@ -529,26 +529,36 @@ Status ReadRecordFromWriteBatch(Slice* input, char* tag,
 
 /**
  * 1个WriteBatch里面可能会有多个put record
+ * 这个地方的设计把数据和对数据的操作解耦
+ * 1 对于WriteBatch而言 我只负责把数据遍历出来 怎么做我不关心
+ * 2 对数据要怎么操作完全交给回调
  * 解析里面每个put record
- * @param handler ProtectionInfoUpdater对象
+ * @param handler Handler接口
+ *                ProtectionInfoUpdater对象
+ *                MemTableInserter
  */
 Status WriteBatch::Iterate(Handler* handler) const {
   if (rep_.size() < WriteBatchInternal::kHeader) {
     return Status::Corruption("malformed WriteBatch (too small)");
   }
-  // WriteBatch逻辑协议带头 所以要跳过头部 直接跳到put record部分
+  // WriteBatch逻辑协议带头 所以要跳过头部 直接跳到put record部分 把Handler回调接口丢进去 对数据的真正处理交给回调
   return WriteBatchInternal::Iterate(this, handler, WriteBatchInternal::kHeader,
                                      rep_.size());
 }
 
 /**
+ * 1 WriteBatch负责对协议里面的数据进行遍历
+ * 2 对这些数据怎么处理就让Handler实现去处理
+ *
  * 协议头两个字段seq和count
  * 假设count是2 那么在WriteBatch的协议体里面就有2个put的record
  * 第1个 tag+cf id+key长度+key+value长度+value
  * 第2个 tag+cf id+key长度+key+value长度+value
  * 所以在处理的时候需要while
  * @param wb WriteBatch逻辑协议=协议头+协议体[begin...end)
- * @param handler ProtectionInfoUpdater对象
+ * @param handler Handler接口回调
+ *                ProtectionInfoUpdater对象
+ *                MemTableInserter
  */
 Status WriteBatchInternal::Iterate(const WriteBatch* wb,
                                    WriteBatch::Handler* handler, size_t begin,
@@ -604,7 +614,7 @@ Status WriteBatchInternal::Iterate(const WriteBatch* wb,
       last_was_try_again = true;
       s = Status::OK();
     }
-    // 2 上面已经解析出来了put record 派发业务处理 真正的处理逻辑在ProtectionInfoUpdater里面
+    // 2 上面已经解析出来了put record 派发业务处理 真正的处理逻辑在Handler接口的实现里面
     switch (tag) {
       case kTypeColumnFamilyValue:
       case kTypeValue:
@@ -3283,6 +3293,7 @@ Status WriteBatchInternal::InsertInto(
     TrimHistoryScheduler* trim_history_scheduler,
     bool ignore_missing_column_families, uint64_t recovery_log_number, DB* db,
     bool seq_per_batch, bool batch_per_txn) {
+  // Handler接口的实现 WriteBatch里面的数据怎么处理全靠inserter决定
   MemTableInserter inserter(
       sequence, memtables, flush_scheduler, trim_history_scheduler,
       ignore_missing_column_families, recovery_log_number, db,
@@ -3301,6 +3312,7 @@ Status WriteBatchInternal::InsertInto(
     SetSequence(w->batch, inserter.sequence());
     inserter.set_log_number_ref(w->log_ref);
     inserter.set_prot_info(w->batch->prot_info_.get());
+    // 把Handler接口回调交给WriteBatch 让它在遍历数据的时候回调
     w->status = w->batch->Iterate(&inserter);
     if (!w->status.ok()) {
       return w->status;

@@ -232,6 +232,11 @@ class WriteBatch : public WriteBatchBase {
 
   // Support for iterating over the contents of a batch.
   // Objects of subclasses of Handler will be used by WriteBatch::Iterate().
+  /**
+  * 定义的接口 交给WriteBatch
+  * 1 WriteBatch负责把自己的数据遍历出来
+  * 2 这些数据怎么处理全部由Handler的具体实现去关注
+  */
   class Handler {
    public:
     virtual ~Handler();
