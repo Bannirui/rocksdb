@@ -30,7 +30,10 @@
 
 namespace ROCKSDB_NAMESPACE {
 
-// Slice只需要知道字符串的地址和字符串多长 并不关心这个资源的所有权 设计理念跟string_view一样
+/**
+ * Slice只需要知道字符串的地址和字符串多长 并不关心这个资源的所有权 设计理念跟string_view一样
+ * 恰恰也就是因为Slice没法对内存的生命周期负责 所以衍生出了{@link PinnableSlice}版本
+ */
 class Slice {
  public:
   // Create an empty slice.
@@ -129,8 +132,9 @@ class Slice {
   // 我认为Slice要持有字符串指针而不是引用或值有两个原因
   // 1 指针占内存小 避免拷贝开销
   // 2 可以直接操作 也是主要原因 因为在编解码层面操作的就是Slice 需要有能力编解码完一个字节就丢掉一个字节 达到流式效果
-  const char* data_;
-  size_t size_;
+  // 本质是为了zero-copy的性能
+  const char* data_; // 字节序列的内存地址
+  size_t size_; // 字节序列多大 有几个字节
 
   // Intentionally copyable
 };
