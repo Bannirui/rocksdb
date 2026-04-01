@@ -31,8 +31,9 @@
 namespace ROCKSDB_NAMESPACE {
 
 /**
- * Slice只需要知道字符串的地址和字符串多长 并不关心这个资源的所有权 设计理念跟string_view一样
- * 恰恰也就是因为Slice没法对内存的生命周期负责 所以衍生出了{@link PinnableSlice}版本
+ * Slice只需要知道字符串的地址和字符串多长 并不关心这个资源的所有权
+ * 设计理念跟string_view一样 恰恰也就是因为Slice没法对内存的生命周期负责
+ * 所以衍生出了{@link PinnableSlice}版本
  */
 class Slice {
  public:
@@ -185,9 +186,17 @@ class OptSlice {
  * to avoid memcpy by having the PinnableSlice object referring to the data
  * that is locked in the memory and release them after the data is consumed.
  */
+/**
+ * 继承自Slice说明本质还是一个只读视图
+ * 继承自Cleanable说明它具备生命周期托管能力
+ *   - 可以注册cleanup
+ *   - 在析构/Reset时自动执行
+ */
 class PinnableSlice : public Slice, public Cleanable {
  public:
+  // 默认构造就是准备走copy路径的
   PinnableSlice() { buf_ = &self_space_; }
+  // 允许使用外部的内存 用于内存复用
   explicit PinnableSlice(std::string* buf) { buf_ = buf; }
 
   PinnableSlice(PinnableSlice&& other);
@@ -197,35 +206,39 @@ class PinnableSlice : public Slice, public Cleanable {
   PinnableSlice(PinnableSlice&) = delete;
   PinnableSlice& operator=(PinnableSlice&) = delete;
 
+  // 带cleanup 我引用你的数据但是我会负责在合适的时机帮你释放内存
   inline void PinSlice(const Slice& s, CleanupFunction f, void* arg1,
                        void* arg2) {
     assert(!pinned_);
     pinned_ = true;
     data_ = s.data();
     size_ = s.size();
+    // 把释放内存的责任挂到当前对象身上
     RegisterCleanup(f, arg1, arg2);
     assert(pinned_);
   }
-
+  // cleanup转移
   inline void PinSlice(const Slice& s, Cleanable* cleanable) {
     assert(!pinned_);
     pinned_ = true;
     data_ = s.data();
     size_ = s.size();
     if (cleanable != nullptr) {
+      // 把别人的cleanup责任转移到我的身上
       cleanable->DelegateCleanupsTo(this);
     }
     assert(pinned_);
   }
-
+  // Copy路径 我不依赖任何外部资源
   inline void PinSelf(const Slice& slice) {
     assert(!pinned_);
+    // 发生memory copy
     buf_->assign(slice.data(), slice.size());
     data_ = buf_->data();
     size_ = buf_->size();
     assert(!pinned_);
   }
-
+  // 没有Copy
   inline void PinSelf() {
     assert(!pinned_);
     data_ = buf_->data();
@@ -268,6 +281,13 @@ class PinnableSlice : public Slice, public Cleanable {
   friend class PinnableSlice4Test;
   std::string self_space_;
   std::string* buf_;
+  /**
+   * PinnableSlice有别于{@link Slice}的主要点是所有权
+   * 两个所有权模型
+   * 1 pinned=true 我不拥有数据但是我锁住它 外部托管生命周期 数据在RocksDB内部但通过pin引用计数把它锁住 也就是说数据不是我的但是我控制什么时候释放它
+   * 2 pinned=false buf=&self_space 我拥有数据 数据被memcpy到self_space 生命周期完全由自己控制 也就是说数据是我的 别人管不着
+   * 3 buf=nullptr 没有数据 我现在啥也没有
+   */
   bool pinned_ = false;
 };
 
