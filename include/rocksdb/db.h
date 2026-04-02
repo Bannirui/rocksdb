@@ -718,10 +718,7 @@ class DB {
     assert(!pinnable_val.IsPinned());
     auto s = Get(options, column_family, key, &pinnable_val);
     if (s.ok() && pinnable_val.IsPinned()) {
-      // 把内容从安全视图拷贝出来 为什么要在这个地方显式复制 因为不确定字符串有没有发生pin
-      // 1 发生了pin 也就是发生了zero-copy 那么实际的数据写到的位置并不是value的内存 需要拷贝出来
-      // 2 没有发生pin 也就是没有发生zero-copy 那么实际的数据写到的位置就是value的内存 不需要拷贝
-      // 所以综合起来 用一次显式的拷贝是最妥当的
+      // 什么时候才要显式复制内存 只有当内存不是我自己 我只负责托管内存生命周期
       value->assign(pinnable_val.data(), pinnable_val.size());
     }  // else value is already assigned
     return s;
