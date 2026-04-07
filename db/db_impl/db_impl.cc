@@ -2450,6 +2450,7 @@ Status DBImpl::GetImpl(const ReadOptions& read_options, const Slice& key,
   TEST_SYNC_POINT("DBImpl::GetImpl:1");
   TEST_SYNC_POINT("DBImpl::GetImpl:2");
 
+  // 准备阶段拿snapshot决定读哪个版本 RocksDB是mvcc 读的是某个seq number之前的最新值
   SequenceNumber snapshot;
   if (read_options.snapshot != nullptr) {
     if (get_impl_options.callback) {
@@ -2521,6 +2522,7 @@ Status DBImpl::GetImpl(const ReadOptions& read_options, const Slice& key,
   if (!skip_memtable) {
     // Get value associated with key
     if (get_impl_options.get_value) {
+      // 先到memtable里面看一眼
       if (sv->mem->Get(
               lkey,
               get_impl_options.value ? get_impl_options.value->GetSelf()
@@ -2545,6 +2547,7 @@ Status DBImpl::GetImpl(const ReadOptions& read_options, const Slice& key,
                               &merge_context, &max_covering_tombstone_seq,
                               read_options, get_impl_options.callback,
                               get_impl_options.is_blob_index)) {
+        // memtable在flush过程中 数据被冻结还没完成落盘
         done = true;
 
         if (get_impl_options.value) {
@@ -2582,6 +2585,7 @@ Status DBImpl::GetImpl(const ReadOptions& read_options, const Slice& key,
   PinnedIteratorsManager pinned_iters_mgr;
   if (!done) {
     PERF_TIMER_GUARD(get_from_output_files_time);
+    // Version+SST查询 遍历L0 二分L1-Ln
     sv->current->Get(
         read_options, lkey, get_impl_options.value, get_impl_options.columns,
         timestamp, &s, &merge_context, &max_covering_tombstone_seq,

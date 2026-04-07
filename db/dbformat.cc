@@ -242,27 +242,41 @@ int InternalKeyComparator::Compare(const ParsedInternalKey& a,
   return -Compare(b, a);
 }
 
+/**
+ * 本质是查找的是界key
+ * LookupKey=user_key+ts+sequence+type的编码结构 用于在有序结构中做版本查找
+ * 内存布局是 长度(这个长度表示LookupKey自己占了多少个字节)+user_key+ts+8字节数字(高56位seq 低8位type)
+ * 因为长度用的是变长整数 所以最多5个字节
+ */
 LookupKey::LookupKey(const Slice& _user_key, SequenceNumber s,
                      const Slice* ts) {
   size_t usize = _user_key.size();
   size_t ts_sz = (nullptr == ts) ? 0 : ts->size();
+  // 前几个字节放的是长度 因为这个整数用的是变长编码 所以最多5字节 那么LookupKey最多占用的空间就是5+usize+ts_sz+8个字节
   size_t needed = usize + ts_sz + 13;  // A conservative estimate
   char* dst;
-  if (needed <= sizeof(space_)) {
+  if (needed <= sizeof(space_)) { // 预分配了200字节的buffer 够用就用它 不够再申请个新的更大的buffer
     dst = space_;
   } else {
     dst = new char[needed];
   }
+  // buffer的起始 也就是LookupKey的地址
   start_ = dst;
   // NOTE: We don't support users keys of more than 2GB :)
+  // LookupKey有多大 编到开头的几个字节 编码完后dst指向的是user_key
   dst = EncodeVarint32(dst, static_cast<uint32_t>(usize + ts_sz + 8));
+  // 记录user_key的地址
   kstart_ = dst;
+  // 把user_key拷贝进来
   memcpy(dst, _user_key.data(), usize);
+  // 指向ts地址
   dst += usize;
+  // 把ts拷贝进来
   if (nullptr != ts) {
     memcpy(dst, ts->data(), ts_sz);
     dst += ts_sz;
   }
+  // 8字节 高56位放的是sequence number 低8位放的是type
   EncodeFixed64(dst, PackSequenceAndType(s, kValueTypeForSeek));
   dst += 8;
   end_ = dst;
