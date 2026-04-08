@@ -735,10 +735,13 @@ class DBImpl : public DB {
                                       bool expose_blob_index = false,
                                       bool allow_refresh = true);
 
+  // 版本控制
   virtual SequenceNumber GetLastPublishedSequence() const {
     if (last_seq_same_as_publish_seq_) {
+      // 不需要做读隔离 就用当前系统最大的seq
       return versions_->LastSequence();
     } else {
+      // 要做读隔离 拿当前可见的seq
       return versions_->LastPublishedSequence();
     }
   }
