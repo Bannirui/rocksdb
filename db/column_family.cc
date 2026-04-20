@@ -493,7 +493,9 @@ ColumnFamilyOptions SanitizeCfOptions(const ImmutableDBOptions& db_options,
 }
 
 int SuperVersion::dummy = 0;
+// 当前线程正在用的
 void* const SuperVersion::kSVInUse = &SuperVersion::dummy;
+// 已经过期 要重新获取
 void* const SuperVersion::kSVObsolete = nullptr;
 
 SuperVersion::~SuperVersion() {
@@ -1346,6 +1348,7 @@ Compaction* ColumnFamilyData::CompactRange(
 
 SuperVersion* ColumnFamilyData::GetReferencedSuperVersion(DBImpl* db) {
   SuperVersion* sv = GetThreadLocalSuperVersion(db);
+  // 增加引用计数 这也是为什么在上面的函数里面要校验防御重复in-use 如果上面的函数没有挡住重复进入 这个地方引用计数又会增加 但是是同一个对象 将来释放的时候计数就只会减1
   sv->Ref();
   if (!ReturnThreadLocalSuperVersion(sv)) {
     // This Unref() corresponds to the Ref() in GetThreadLocalSuperVersion()
@@ -1369,16 +1372,27 @@ SuperVersion* ColumnFamilyData::GetThreadLocalSuperVersion(DBImpl* db) {
   // have swapped in kSVObsolete. We re-check the value at when returning
   // SuperVersion back to thread local, with an atomic compare and swap.
   // The superversion will need to be released if detected to be stale.
+  // 取出当前thread-local的值 把它替换成当前线程正在用的
   void* ptr = local_sv_->Swap(SuperVersion::kSVInUse);
   // Invariant:
   // (1) Scrape (always) installs kSVObsolete in ThreadLocal storage
   // (2) the Swap above (always) installs kSVInUse, ThreadLocal storage
   // should only keep kSVInUse before ReturnThreadLocalSuperVersion call
   // (if no Scrape happens).
+  // 防御性检查 保证不会重入 为什么这个地方要校验 如果不校验 这个函数外面会对引用计数+1 那么同一个对象的引用计数是2 将来释放的时候-1 影响对象的释放
   assert(ptr != SuperVersion::kSVInUse);
   SuperVersion* sv = static_cast<SuperVersion*>(ptr);
   if (sv == SuperVersion::kSVObsolete) {
+    /**
+     * 看看有没有过期
+     * 什么时候会过期呢
+     *   1 写入会替换memTable
+     *   2 flush会冻结mem
+     *   3 compaction会改变Version
+     * 当这些动作发生的时候 后台线程会标记已经过期
+     */
     RecordTick(ioptions_.stats, NUMBER_SUPERVERSION_ACQUIRES);
+    // 缓存失效了 要上锁 重新去拿最新的快照
     db->mutex()->Lock();
     sv = super_version_->Ref();
     db->mutex()->Unlock();

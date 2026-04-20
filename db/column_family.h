@@ -680,6 +680,13 @@ class ColumnFamilyData {
 
   // Thread's local copy of SuperVersion pointer
   // This needs to be destructed before mutex_
+  /**
+   * 它是thread-local的状态机
+   * 对每个线程来说 它只有3个状态
+   *   1 sv 缓存的SuperVersion 可以复用
+   *   2 obsolete 缓存失效了 要重新获取
+   *   3 in-use 当前线程正在使用的 暂时的占位
+   */
   std::unique_ptr<ThreadLocalPtr> local_sv_;
 
   // pointers for a circular linked list. we use it to support iterations over
