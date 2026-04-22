@@ -2436,6 +2436,7 @@ Status DBImpl::GetImpl(const ReadOptions& read_options, const Slice& key,
   }
 
   // Acquire SuperVersion
+  // 拿到列簇的快照 里面包含3大组件 MemTable 冻结的MemTable Version
   SuperVersion* sv = GetAndRefSuperVersion(cfd);
   if (read_options.timestamp && read_options.timestamp->size() > 0) {
     const Status s =
